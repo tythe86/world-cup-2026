@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 FIFA World Cup 2026 – Match Prediction Model
 =============================================
@@ -53,34 +54,102 @@ RESULTS_URL = (
 
 # FIFA World Cup 2026 group stage schedule (openfootball public domain data)
 WC2026_MATCHES = [
-    # Group A
-    ("Mexico",       "South Africa",   "2026-06-11"),
-    ("Poland",       "Saudi Arabia",   "2026-06-12"),
-    ("Mexico",       "Poland",         "2026-06-17"),
-    ("Saudi Arabia", "South Africa",   "2026-06-17"),
-    ("Mexico",       "Saudi Arabia",   "2026-06-22"),
-    ("South Africa", "Poland",         "2026-06-22"),
-    # Group B
-    ("USA",          "Canada",         "2026-06-15"),
-    ("Uruguay",      "Panama",         "2026-06-15"),
-    ("USA",          "Panama",         "2026-06-19"),
-    ("Uruguay",      "Canada",         "2026-06-19"),
-    ("USA",          "Uruguay",        "2026-06-24"),
-    ("Canada",       "Panama",         "2026-06-24"),
-    # Group C  (high-interest group)
-    ("Brazil",       "Germany",        "2026-06-16"),
-    ("Japan",        "Croatia",        "2026-06-16"),
-    ("Brazil",       "Japan",          "2026-06-21"),
-    ("Germany",      "Croatia",        "2026-06-21"),
-    ("Brazil",       "Croatia",        "2026-06-26"),
-    ("Germany",      "Japan",          "2026-06-26"),
-    # Group D (death group)
-    ("France",       "Argentina",      "2026-06-14"),
-    ("England",      "Spain",          "2026-06-13"),
-    ("France",       "England",        "2026-06-20"),
-    ("Argentina",    "Spain",          "2026-06-20"),
-    ("France",       "Spain",          "2026-06-25"),
-    ("Argentina",    "England",        "2026-06-25"),
+    # ── GROUP A ─────────────────────────────────────────────
+    # Mexico, South Africa, South Korea, Czechia
+    ("Mexico",        "South Africa",   "2026-06-11"),
+    ("South Korea",   "Czechia",        "2026-06-11"),
+    ("Mexico",        "Czechia",        "2026-06-17"),
+    ("South Korea",   "South Africa",   "2026-06-17"),
+    ("Mexico",        "South Korea",    "2026-06-22"),
+    ("Czechia",       "South Africa",   "2026-06-22"),
+    # ── GROUP B ─────────────────────────────────────────────
+    # Canada, Bosnia and Herzegovina, Qatar, Switzerland
+    ("Canada",        "Bosnia and Herzegovina", "2026-06-12"),
+    ("Qatar",         "Switzerland",    "2026-06-13"),
+    ("Canada",        "Qatar",          "2026-06-18"),
+    ("Bosnia and Herzegovina", "Switzerland", "2026-06-18"),
+    ("Canada",        "Switzerland",    "2026-06-23"),
+    ("Bosnia and Herzegovina", "Qatar", "2026-06-23"),
+    # ── GROUP C ─────────────────────────────────────────────
+    # Brazil, Morocco, Haiti, Scotland
+    ("Brazil",        "Morocco",        "2026-06-13"),
+    ("Haiti",         "Scotland",       "2026-06-13"),
+    ("Brazil",        "Scotland",       "2026-06-18"),
+    ("Morocco",       "Haiti",          "2026-06-19"),
+    ("Brazil",        "Haiti",          "2026-06-23"),
+    ("Scotland",      "Morocco",        "2026-06-24"),
+    # ── GROUP D ─────────────────────────────────────────────
+    # USA, Paraguay, Australia, Turkey
+    ("USA",           "Paraguay",       "2026-06-12"),
+    ("Australia",     "Turkey",         "2026-06-14"),
+    ("USA",           "Australia",      "2026-06-19"),
+    ("Paraguay",      "Turkey",         "2026-06-19"),
+    ("USA",           "Turkey",         "2026-06-25"),
+    ("Paraguay",      "Australia",      "2026-06-25"),
+    # ── GROUP E ─────────────────────────────────────────────
+    # Germany, Curacao, Ivory Coast, Ecuador
+    ("Germany",       "Ecuador",        "2026-06-14"),
+    ("Curacao",       "Ivory Coast",    "2026-06-14"),
+    ("Germany",       "Ivory Coast",    "2026-06-19"),
+    ("Ecuador",       "Curacao",        "2026-06-20"),
+    ("Germany",       "Curacao",        "2026-06-24"),
+    ("Ivory Coast",   "Ecuador",        "2026-06-25"),
+    # ── GROUP F ─────────────────────────────────────────────
+    # Netherlands, Japan, Tunisia, and UEFA Playoff B
+    ("Netherlands",   "Japan",          "2026-06-14"),
+    ("Tunisia",       "UEFA Playoff B", "2026-06-15"),
+    ("Netherlands",   "Tunisia",        "2026-06-20"),
+    ("Japan",         "UEFA Playoff B", "2026-06-20"),
+    ("Netherlands",   "UEFA Playoff B", "2026-06-25"),
+    ("Japan",         "Tunisia",        "2026-06-25"),
+    # ── GROUP G ─────────────────────────────────────────────
+    # Belgium, Egypt, Iran, New Zealand
+    ("Belgium",       "Egypt",          "2026-06-15"),
+    ("Iran",          "New Zealand",    "2026-06-15"),
+    ("Belgium",       "Iran",           "2026-06-20"),
+    ("Egypt",         "New Zealand",    "2026-06-21"),
+    ("Belgium",       "New Zealand",    "2026-06-25"),
+    ("Egypt",         "Iran",           "2026-06-26"),
+    # ── GROUP H ─────────────────────────────────────────────
+    # Spain, Cape Verde, Saudi Arabia, Uruguay
+    ("Spain",         "Cape Verde",     "2026-06-15"),
+    ("Saudi Arabia",  "Uruguay",        "2026-06-15"),
+    ("Spain",         "Uruguay",        "2026-06-21"),
+    ("Saudi Arabia",  "Cape Verde",     "2026-06-21"),
+    ("Spain",         "Saudi Arabia",   "2026-06-26"),
+    ("Uruguay",       "Cape Verde",     "2026-06-26"),
+    # ── GROUP I ─────────────────────────────────────────────
+    # France, Senegal, Iraq, Norway
+    ("France",        "Senegal",        "2026-06-16"),
+    ("Iraq",          "Norway",         "2026-06-16"),
+    ("France",        "Norway",         "2026-06-21"),
+    ("Senegal",       "Iraq",           "2026-06-22"),
+    ("France",        "Iraq",           "2026-06-26"),
+    ("Norway",        "Senegal",        "2026-06-27"),
+    # ── GROUP J ─────────────────────────────────────────────
+    # Argentina, Algeria, Austria, Jordan
+    ("Argentina",     "Algeria",        "2026-06-16"),
+    ("Austria",       "Jordan",         "2026-06-16"),
+    ("Argentina",     "Jordan",         "2026-06-22"),
+    ("Algeria",       "Austria",        "2026-06-22"),
+    ("Argentina",     "Austria",        "2026-06-26"),
+    ("Jordan",        "Algeria",        "2026-06-27"),
+    # ── GROUP K ─────────────────────────────────────────────
+    # Portugal, DR Congo, Uzbekistan, Colombia
+    ("Portugal",      "DR Congo",       "2026-06-17"),
+    ("Uzbekistan",    "Colombia",       "2026-06-17"),
+    ("Portugal",      "Uzbekistan",     "2026-06-22"),
+    ("Colombia",      "DR Congo",       "2026-06-23"),
+    ("Portugal",      "Colombia",       "2026-06-27"),
+    ("DR Congo",      "Uzbekistan",     "2026-06-27"),
+    # ── GROUP L ─────────────────────────────────────────────
+    # England, Croatia, Ghana, Panama
+    ("England",       "Croatia",        "2026-06-17"),
+    ("Ghana",         "Panama",         "2026-06-17"),
+    ("England",       "Ghana",          "2026-06-23"),
+    ("Croatia",       "Panama",         "2026-06-23"),
+    ("England",       "Panama",         "2026-06-27"),
+    ("Croatia",       "Ghana",          "2026-06-27"),
 ]
 
 
@@ -112,6 +181,14 @@ def load_results(max_rows: int = 50_000) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"])
     # Keep only matches from 1990 onward (modern football)
     df = df[df["date"] >= "1990-01-01"].copy()
+    # Drop rows with missing scores (NaN) — real dataset has some future/cancelled matches
+    before = len(df)
+    df = df.dropna(subset=["home_score", "away_score"]).copy()
+    df["home_score"] = df["home_score"].astype(int)
+    df["away_score"] = df["away_score"].astype(int)
+    dropped = before - len(df)
+    if dropped > 0:
+        print(f"    Dropped {dropped} rows with missing scores.")
     print(f"    {len(df):,} matches loaded (1990–present).")
     return df
 
