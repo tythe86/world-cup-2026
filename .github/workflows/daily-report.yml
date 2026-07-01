@@ -23,7 +23,7 @@ concurrency:
 jobs:
   generate-report:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: 检出代码
@@ -43,7 +43,7 @@ jobs:
       - name: 生成中文预测报告
         env:
           BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
-          SIM_RUNS: ${{ github.event.inputs.sim_runs || '3000' }}
+          SIM_RUNS: ${{ github.event.inputs.sim_runs || '10000' }}
           TOP_N: '20'
           MPLBACKEND: Agg   # 无显示环境下的 matplotlib 后端
         run: python report_zh.py

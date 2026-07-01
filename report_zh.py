@@ -21,8 +21,11 @@ from __future__ import annotations
 import os
 import sys
 import datetime as dt
+from collections import defaultdict
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import requests
 
 # 复用同目录下的模型代码
@@ -205,6 +208,56 @@ def render_prediction(pred) -> str:
     return "\n".join(lines)
 
 
+def simulate_tournament_fast(elo, model, feat_df, n_sims: int = 3000):
+    """
+    与 predictor.simulate_tournament 数学等价，但快得多。
+
+    原版每次对阵都调用 predict_match（内部对 5 万行数据做全表扫描），
+    蒙特卡洛里被调用上万次 → 极慢。由于 predict_match 是纯函数（给定两队
+    结果不变），这里把全部 48×47 种对阵概率预算一次缓存，模拟时只查表。
+    """
+    print(f"\n🏆  运行 {n_sims:,} 次锦标赛模拟（快速版：预计算对阵概率）…")
+
+    all_teams = sorted(set(t for m in P.WC2026_MATCHES for t in (m[0], m[1])))
+
+    # 预计算每一对（有序）对阵的 [主胜, 平, 客胜] 概率
+    cache: dict[tuple[str, str], tuple[float, float, float]] = {}
+    for h in all_teams:
+        for a in all_teams:
+            if h == a:
+                continue
+            p = P.predict_match(h, a, elo, model, feat_df, neutral=True, is_wc=True)
+            cache[(h, a)] = (p["p_home"], p["p_draw"], p["p_away"])
+
+    wins: dict[str, int] = defaultdict(int)
+    for _ in range(n_sims):
+        remaining = list(all_teams)
+        while len(remaining) > 1:
+            rng = np.random.default_rng()
+            rng.shuffle(remaining)
+            nxt = []
+            for i in range(0, len(remaining) - 1, 2):
+                h, a = remaining[i], remaining[i + 1]
+                p_home, p_draw, _ = cache[(h, a)]
+                roll = rng.random()
+                if roll < p_home:
+                    nxt.append(h)
+                elif roll < p_home + p_draw:
+                    nxt.append(h if rng.random() > 0.5 else a)  # 点球 50/50
+                else:
+                    nxt.append(a)
+            if len(remaining) % 2 == 1:
+                nxt.append(remaining[-1])  # 轮空
+            remaining = nxt
+        wins[remaining[0]] += 1
+
+    results = pd.DataFrame([
+        {"team": t, "championship_prob": round(wins.get(t, 0) / n_sims * 100, 2)}
+        for t in sorted(all_teams, key=lambda x: -wins.get(x, 0))
+    ])
+    return results
+
+
 def render_championship(sim, top_k=12) -> str:
     lines = ["| 排名 | 球队 | 夺冠概率 |", "|---:|:--|--:|"]
     for i, row in enumerate(sim.head(top_k).itertuples(), 1):
@@ -275,9 +328,9 @@ def main():
         except Exception as e:
             print(f"  跳过 {m['home']} vs {m['away']}：{e}")
 
-    # 4. 蒙特卡洛夺冠模拟
+    # 4. 蒙特卡洛夺冠模拟（快速版：预计算对阵概率，避免万次全表扫描）
     print(f"▶ 蒙特卡洛模拟（{sim_runs:,} 次）…", flush=True)
-    sim = P.simulate_tournament(elo, model, feat_df, n_sims=sim_runs)
+    sim = simulate_tournament_fast(elo, model, feat_df, n_sims=sim_runs)
 
     # 5. 渲染 Markdown
     md = []

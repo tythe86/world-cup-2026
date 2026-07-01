@@ -47,7 +47,7 @@ Charts are saved to the `visuals/` folder — ready to use in videos.
 ```bash
 # 在本地手动生成一次报告（可选）
 python report_zh.py
-# 可调参数：SIM_RUNS（模拟次数，默认 3000）、TOP_N（排名数，默认 20）
+# 可调参数：SIM_RUNS（模拟次数，默认 10000）、TOP_N（排名数，默认 20）
 ```
 
 ---
