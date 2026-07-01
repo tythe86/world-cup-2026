@@ -1,0 +1,69 @@
+name: 每日世界杯预测报告（中文）
+
+# 触发条件：每天定时 + 手动
+on:
+  schedule:
+    # UTC 23:07 ≈ 北京时间次日 07:07（避开整点高峰，减少 GitHub cron 延迟）
+    - cron: '7 23 * * *'
+  workflow_dispatch:
+    inputs:
+      sim_runs:
+        description: '蒙特卡洛模拟次数（默认 3000）'
+        required: false
+        default: '3000'
+
+# 提交报告需要写权限；并发控制避免重复跑
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-report
+  cancel-in-progress: false
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 生成中文预测报告
+        env:
+          BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
+          SIM_RUNS: ${{ github.event.inputs.sim_runs || '3000' }}
+          TOP_N: '20'
+          MPLBACKEND: Agg   # 无显示环境下的 matplotlib 后端
+        run: python report_zh.py
+
+      - name: 写入本次运行的摘要（Actions 页面可直接看）
+        run: |
+          {
+            echo "# 📄 本次预测报告"
+            echo ""
+            cat reports/预测报告.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 提交报告回仓库
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/预测报告.md reports/archive/
+          if git diff --cached --quiet; then
+            echo "报告无变化，跳过提交。"
+          else
+            git commit -m "🤖 自动更新每日预测报告 $(date -u +%Y-%m-%d) [skip ci]"
+            git push
+          fi
