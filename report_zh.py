@@ -322,6 +322,11 @@ def push_to_wechat(token: str, title: str, content: str, template: str = "markdo
     if not token:
         return "未配置 PUSHPLUS_TOKEN，跳过微信推送"
     try:
+        # PushPlus 的消息预览 = content 原文前若干字符（连 HTML 标签都不剥）。
+        # HTML 模板下 content 以 <!DOCTYPE> 开头 → 预览会显示一堆标签代码。
+        # 把纯文本摘要放到 content 最前面，预览就能抓到干净文字（正文顶部也会多一行 TL;DR 摘要）。
+        if summary and template == "html":
+            content = f"{summary}\n" + content
         payload = {
             "token": token, "title": title, "content": content,
             "template": template, "channel": "wechat",
@@ -679,24 +684,24 @@ def render_html_report(now_str, live_status, live_note, odds_status,
                  + render_html_summary(predictions)
                  + '<p class="muted" style="margin-top:8px">预测比分由 xG 经 Poisson 分布取概率最高者，仅供参考。</p></div>')
 
-    # 二、实力排名
+    # 二、比赛预测（详细）
     i = "二" if has_pred else "一"
-    P.append(f'<div class="card"><h2>📊 {i}、AI 实力排名（Elo Top {len(top)}）</h2>'
-             + render_html_rankings(top) + '</div>')
-
-    # 三、比赛预测（详细）
-    i = "三" if has_pred else "二"
     body = "".join(render_html_match(p) for p in predictions) if has_pred \
         else '<p class="muted">本期无可用比赛预测。</p>'
     P.append(f'<div class="card"><h2>🔮 {i}、比赛预测（详细）</h2>{body}</div>')
 
-    # 四、夺冠概率
-    i = "四" if has_pred else "三"
+    # 三、夺冠概率
+    i = "三" if has_pred else "二"
     champ = f'<div class="card"><h2>🏆 {i}、夺冠概率模拟（蒙特卡洛 {sim_runs:,} 次）</h2>'
     if alive_note:
         champ += f'<p class="muted" style="margin:-2px 0 8px">{_h(alive_note)}</p>'
     champ += render_html_championship(sim) + '</div>'
     P.append(champ)
+
+    # 四、AI 实力排名（按读者偏好置于最后）
+    i = "四" if has_pred else "三"
+    P.append(f'<div class="card"><h2>📊 {i}、AI 实力排名（Elo Top {len(top)}）</h2>'
+             + render_html_rankings(top) + '</div>')
 
     # 说明
     P.append('<div class="card"><h2>📌 说明</h2><ul class="notes">'
@@ -813,11 +818,7 @@ def main():
         md.append("\n_预测比分由 xG 经 Poisson 分布取概率最高者；仅供参考。_\n")
         md.append("\n---\n")
 
-    md.append(f"## 📊 {'二' if predictions else '一'}、AI 实力排名（Elo Top {len(top)}）\n")
-    md.append(render_rankings(top))
-    md.append("\n---\n")
-
-    md.append(f"## 🔮 {'三' if predictions else '二'}、比赛预测（详细）\n")
+    md.append(f"## 🔮 {'二' if predictions else '一'}、比赛预测（详细）\n")
     if predictions:
         for pred in predictions:
             when = pred.get("bj") or pred.get("mdate", "")
@@ -828,10 +829,14 @@ def main():
         md.append("_本期无可用比赛预测。_\n")
     md.append("\n---\n")
 
-    md.append(f"## 🏆 {'四' if predictions else '三'}、夺冠概率模拟（蒙特卡洛 {sim_runs:,} 次）\n")
+    md.append(f"## 🏆 {'三' if predictions else '二'}、夺冠概率模拟（蒙特卡洛 {sim_runs:,} 次）\n")
     if alive_note:
         md.append(f"> _{alive_note}_\n")
     md.append(render_championship(sim))
+    md.append("\n---\n")
+
+    md.append(f"## 📊 {'四' if predictions else '三'}、AI 实力排名（Elo Top {len(top)}）\n")
+    md.append(render_rankings(top))
     md.append("\n---\n")
 
     md.append("## 📌 说明\n")
