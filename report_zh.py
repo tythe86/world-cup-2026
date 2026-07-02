@@ -186,6 +186,38 @@ def fetch_openfootball_upcoming(today, days_ahead: int = 5, limit: int = 8):
 # 报告渲染
 # ──────────────────────────────────────────────
 
+def predicted_scoreline(xg_h: float, xg_a: float, max_goals: int = 6):
+    """用 xG 做独立 Poisson，取概率最高的具体比分。返回 (score_str, prob)。"""
+    from math import exp, factorial
+
+    def pois(k: int, lam: float) -> float:
+        return exp(-lam) * (lam ** k) / factorial(k)
+
+    best, best_p = (0, 0), 0.0
+    for i in range(max_goals + 1):
+        pi = pois(i, xg_h)
+        for j in range(max_goals + 1):
+            p = pi * pois(j, xg_a)
+            if p > best_p:
+                best, best_p = (i, j), p
+    return f"{best[0]}–{best[1]}", best_p
+
+
+def render_summary(predictions) -> str:
+    """顶部汇总表：每场比赛的预测比分 + 看好方 + 胜平负概率。"""
+    lines = ["| 北京时间 | 比赛 | 预测比分 | 最被看好 | 主胜/平/客胜 |",
+             "|---|---|:--:|---|---:|"]
+    for pred in predictions:
+        score, _ = predicted_scoreline(pred["xg_home"], pred["xg_away"])
+        fav = pred["favorite"]
+        fav_tag = f"{cn(fav)} ({max(pred['p_home'],pred['p_draw'],pred['p_away'])*100:.0f}%)"
+        odds = f"{pred['p_home']*100:.0f}% / {pred['p_draw']*100:.0f}% / {pred['p_away']*100:.0f}%"
+        match = f"{cn(pred['home'])} vs {cn(pred['away'])}"
+        when = pred.get("bj") or pred.get("mdate") or "—"
+        lines.append(f"| {when} | {match} | **{score}** | {fav_tag} | {odds} |")
+    return "\n".join(lines)
+
+
 def render_rankings(top) -> str:
     lines = ["| 排名 | 球队 | Elo 评分 |", "|---:|:--|--:"]
     for i, row in enumerate(top.itertuples(), 1):
@@ -347,11 +379,18 @@ def main():
     md.append(f"> 数据说明：{live_status} {live_note}\n")
     md.append("\n---\n")
 
-    md.append(f"## 📊 一、AI 实力排名（Elo Top {len(top)}）\n")
+    # 一、汇总：未踢比赛的预测比分（最显眼，放最前）
+    if predictions:
+        md.append("## ⚽ 一、比赛预测汇总（预测比分）\n")
+        md.append(render_summary(predictions))
+        md.append("\n_预测比分由 xG 经 Poisson 分布取概率最高者；仅供参考。_\n")
+        md.append("\n---\n")
+
+    md.append(f"## 📊 {'二' if predictions else '一'}、AI 实力排名（Elo Top {len(top)}）\n")
     md.append(render_rankings(top))
     md.append("\n---\n")
 
-    md.append("## 🔮 二、比赛预测\n")
+    md.append(f"## 🔮 {'三' if predictions else '二'}、比赛预测（详细）\n")
     if predictions:
         for pred in predictions:
             when = pred.get("bj") or pred.get("mdate", "")
@@ -362,7 +401,7 @@ def main():
         md.append("_本期无可用比赛预测。_\n")
     md.append("\n---\n")
 
-    md.append(f"## 🏆 三、夺冠概率模拟（蒙特卡洛 {sim_runs:,} 次）\n")
+    md.append(f"## 🏆 {'四' if predictions else '三'}、夺冠概率模拟（蒙特卡洛 {sim_runs:,} 次）\n")
     md.append(render_championship(sim))
     md.append("\n---\n")
 
