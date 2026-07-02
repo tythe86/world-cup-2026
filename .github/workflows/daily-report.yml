@@ -42,6 +42,7 @@ jobs:
 
       - name: 生成中文预测报告
         env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}   # The Odds API（可选，免费 key）
           SIM_RUNS: ${{ github.event.inputs.sim_runs || '10000' }}
           TOP_N: '20'
           DAYS_AHEAD: '5'    # 预测未来多少天内的比赛

@@ -182,6 +182,60 @@ def fetch_openfootball_upcoming(today, days_ahead: int = 5, limit: int = 8):
     return picked, f"openfootball 实时赛程，共 {len(picked)} 场未踢（未来 {days_ahead} 天，按北京时间）"
 
 
+# The Odds API（免费 500 次/月）：世界杯 h2h 赔率，反推市场隐含概率
+ODDS_URL = "https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds/"
+
+
+def fetch_odds(api_key: str):
+    """拉取世界杯 h2h 赔率，返回 {frozenset({home,away}): odds_dict}。失败返回 ({},原因)。"""
+    if not api_key:
+        return {}, ""
+    try:
+        r = requests.get(ODDS_URL, params={
+            "apiKey": api_key, "regions": "eu,uk,us",
+            "markets": "h2h", "oddsFormat": "decimal",
+        }, timeout=30)
+        if r.status_code == 401:
+            return {}, "⚠️ Odds API key 无效（401）"
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        return {}, f"⚠️ 赔率拉取失败：{type(e).__name__}"
+
+    odds_map = {}
+    for e in data:
+        home = normalize_team(e.get("home_team"))
+        away = normalize_team(e.get("away_team"))
+        if not home or not away or home == away:
+            continue
+        # 各家博彩公司的 h2h 价格，按 outcome 取平均
+        prices = defaultdict(list)  # 'Draw' 或 归一化队名 -> [价格]
+        for bm in e.get("bookmakers", []):
+            for m in bm.get("markets", []):
+                if m.get("key") != "h2h":
+                    continue
+                for o in m.get("outcomes", []):
+                    nm = o.get("name")
+                    key = "Draw" if nm == "Draw" else normalize_team(nm)
+                    if o.get("price"):
+                        prices[key].append(float(o["price"]))
+        if not prices:
+            continue
+        avg = {k: sum(v) / len(v) for k, v in prices.items()}
+        ph, pd, pa = avg.get(home), avg.get("Draw"), avg.get(away)
+        if not (ph and pd and pa):
+            continue
+        rh, rd, ra = 1 / ph, 1 / pd, 1 / pa       # 反推
+        tot = rh + rd + ra                         # 去水（去 overround）
+        odds_map[frozenset({home, away})] = {
+            "ph": round(ph, 2), "pd": round(pd, 2), "pa": round(pa, 2),
+            "imp_home": round(rh / tot * 100, 1),
+            "imp_draw": round(rd / tot * 100, 1),
+            "imp_away": round(ra / tot * 100, 1),
+        }
+    return odds_map, f"The Odds API 赔率，覆盖 {len(odds_map)} 场"
+
+
 # ──────────────────────────────────────────────
 # 报告渲染
 # ──────────────────────────────────────────────
@@ -204,17 +258,27 @@ def predicted_scoreline(xg_h: float, xg_a: float, max_goals: int = 6):
 
 
 def render_summary(predictions) -> str:
-    """顶部汇总表：每场比赛的预测比分 + 看好方 + 胜平负概率。"""
-    lines = ["| 北京时间 | 比赛 | 预测比分 | 最被看好 | 主胜/平/客胜 |",
-             "|---|---|:--:|---|---:|"]
+    """顶部汇总表：预测比分 + 模型概率（有赔率时并列市场反推概率）。"""
+    has_odds = any(p.get("odds") for p in predictions)
+    if has_odds:
+        lines = ["| 北京时间 | 比赛 | 预测比分 | 模型 主/平/客 | 市场赔率反推 主/平/客 |",
+                 "|---|---|:--:|---:|---:|"]
+    else:
+        lines = ["| 北京时间 | 比赛 | 预测比分 | 最被看好 | 主胜/平/客胜 |",
+                 "|---|---|:--:|---|---:|"]
     for pred in predictions:
         score, _ = predicted_scoreline(pred["xg_home"], pred["xg_away"])
-        fav = pred["favorite"]
-        fav_tag = f"{cn(fav)} ({max(pred['p_home'],pred['p_draw'],pred['p_away'])*100:.0f}%)"
-        odds = f"{pred['p_home']*100:.0f}% / {pred['p_draw']*100:.0f}% / {pred['p_away']*100:.0f}%"
         match = f"{cn(pred['home'])} vs {cn(pred['away'])}"
         when = pred.get("bj") or pred.get("mdate") or "—"
-        lines.append(f"| {when} | {match} | **{score}** | {fav_tag} | {odds} |")
+        model = f"{pred['p_home']*100:.0f}% / {pred['p_draw']*100:.0f}% / {pred['p_away']*100:.0f}%"
+        if has_odds:
+            o = pred.get("odds")
+            market = f"{o['imp_home']:.0f}% / {o['imp_draw']:.0f}% / {o['imp_away']:.0f}%" if o else "—"
+            lines.append(f"| {when} | {match} | **{score}** | {model} | {market} |")
+        else:
+            fav = pred["favorite"]
+            fav_tag = f"{cn(fav)} ({max(pred['p_home'],pred['p_draw'],pred['p_away'])*100:.0f}%)"
+            lines.append(f"| {when} | {match} | **{score}** | {fav_tag} | {model} |")
     return "\n".join(lines)
 
 
@@ -240,8 +304,11 @@ def render_prediction(pred) -> str:
         f"- 预期进球 (xG)：{cn(home)} **{pred['xg_home']:.2f}** – {pred['xg_away']:.2f} **{cn(away)}**",
         f"- Elo 评分：{cn(home)} {pred['elo_home']:.0f}　/　{cn(away)} {pred['elo_away']:.0f}",
         f"- 🏅 最被看好：**{cn(fav)}**",
-        "",
     ]
+    o = pred.get("odds")
+    if o:
+        lines.append(f"- 💰 市场赔率反推：{cn(home)} {o['imp_home']:.0f}% / 平 {o['imp_draw']:.0f}% / {cn(away)} {o['imp_away']:.0f}%（赔率 {o['ph']}/{o['pd']}/{o['pa']}）")
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -368,6 +435,13 @@ def main():
         except Exception as e:
             print(f"  跳过 {m['home']} vs {m['away']}：{e}")
 
+    # 3.5 附加市场赔率（The Odds API，可选）→ 每场挂上 odds
+    odds_api_key = (os.environ.get("ODDS_API_KEY") or "").strip()
+    odds_map, odds_status = fetch_odds(odds_api_key)
+    if odds_map:
+        for pred in predictions:
+            pred["odds"] = odds_map.get(frozenset({pred["home"], pred["away"]}))
+
     # 4. 蒙特卡洛夺冠模拟（快速版：预计算对阵概率，避免万次全表扫描）
     print(f"▶ 蒙特卡洛模拟（{sim_runs:,} 次）…", flush=True)
     sim = simulate_tournament_fast(elo, model, feat_df, n_sims=sim_runs)
@@ -377,6 +451,8 @@ def main():
     md.append(f"# ⚽ 2026 世界杯 AI 每日预测报告\n")
     md.append(f"> 生成时间：**{now_str}** ｜ 模型：Elo + XGBoost（5 万+ 历史比赛训练）\n")
     md.append(f"> 数据说明：{live_status} {live_note}\n")
+    if odds_status:
+        md.append(f"> 赔率：{odds_status}\n")
     md.append("\n---\n")
 
     # 一、汇总：未踢比赛的预测比分（最显眼，放最前）
@@ -410,6 +486,7 @@ def main():
     md.append("- 胜率由 XGBoost 多分类模型给出（主胜 / 平 / 客胜）；xG 为基于状态与 Elo 的预期进球估计。")
     md.append("- 夺冠概率来自全赛程蒙特卡洛模拟，含点球 50/50 近似。")
     md.append("- 实时赛程来自 openfootball（免费、无需 key，赛后更新）；拉取失败时自动回退到内置重点对决。")
+    md.append("- 市场赔率来自 [The Odds API](https://the-odds-api.com)（免费 key），取多家博彩公司均值并**去水**（去除 overround）反推为隐含概率。赔率已把伤病/阵容/资金面等新闻聚合在内，可与模型概率对照；未配置 key 时该列省略。")
     md.append(f"\n_本报告由 GitHub Actions 每日自动生成。_\n")
 
     report = "\n".join(md)
