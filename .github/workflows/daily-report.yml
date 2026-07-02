@@ -43,6 +43,7 @@ jobs:
       - name: 生成中文预测报告
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}   # The Odds API（可选，免费 key）
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}  # PushPlus 微信推送（可选）
           SIM_RUNS: ${{ github.event.inputs.sim_runs || '10000' }}
           TOP_N: '20'
           DAYS_AHEAD: '1'    # 只预测未来 1 天内的比赛

@@ -239,6 +239,27 @@ def fetch_odds(api_key: str):
     return odds_map, f"The Odds API 赔率，覆盖 {len(odds_map)} 场"
 
 
+# PushPlus：把报告推送到微信（免费，token 来自 secret）
+PUSHPLUS_URL = "http://www.pushplus.plus/send"
+
+
+def push_to_wechat(token: str, title: str, content: str) -> str:
+    """通过 PushPlus 把 markdown 报告推送到微信。返回结果说明。"""
+    if not token:
+        return "未配置 PUSHPLUS_TOKEN，跳过微信推送"
+    try:
+        r = requests.post(PUSHPLUS_URL, json={
+            "token": token, "title": title, "content": content,
+            "template": "markdown", "channel": "wechat",
+        }, timeout=30)
+        data = r.json()
+        if data.get("code") == 200:
+            return "已推送到微信（PushPlus）"
+        return f"⚠️ 微信推送失败：{data.get('msg')}"
+    except Exception as e:
+        return f"⚠️ 微信推送异常：{type(e).__name__}: {e}"
+
+
 # ──────────────────────────────────────────────
 # 报告渲染
 # ──────────────────────────────────────────────
@@ -508,6 +529,13 @@ def main():
     print(report)
     print("=" * 60)
     print(f"\n✅ 报告已写入：{latest}")
+
+    # 7. 推送到微信（PushPlus，可选）
+    pushplus_token = (os.environ.get("PUSHPLUS_TOKEN") or "").strip()
+    n_matches = len(predictions)
+    title = f"⚽ 2026世界杯AI预测 · {today.isoformat()}（{n_matches}场）"
+    push_msg = push_to_wechat(pushplus_token, title, report)
+    print(f"📲 {push_msg}")
     return report
 
 
