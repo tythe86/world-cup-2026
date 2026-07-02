@@ -41,13 +41,14 @@ Charts are saved to the `visuals/` folder — ready to use in videos.
 
 报告内容：① AI 实力排名（Elo）② 比赛胜率 / xG 预测 ③ 蒙特卡洛夺冠概率模拟。
 
-### 实时赛程（可选）
-比赛期间，设置仓库 Secret `BALLDONTLIE_API_KEY`（[fifa.balldontlie.io](https://fifa.balldontlie.io/) 免费 key）后，报告会自动改用**实时赛程**预测当天及之后未开始的比赛。Key 未配置或失效时自动回退到内置重点对决，不影响报告生成。
+### 实时赛程（免费、无需 API key）
+比赛赛程与比分来自 [openfootball/worldcup.json](https://github.com/openfootball/worldcup.json)（公开数据，免费、无需注册和 key，赛后更新）。报告会自动预测未来若干天「未踢且对阵已确定」的比赛，开赛时间按**北京时间**显示。openfootball 拉取失败时自动回退到内置重点对决，不影响报告生成。
 
 ```bash
 # 在本地手动生成一次报告（可选）
 python report_zh.py
 # 可调参数：SIM_RUNS（模拟次数，默认 10000）、TOP_N（排名数，默认 20）
+#          DAYS_AHEAD（预测未来几天，默认 5）、MAX_PREDICT（最多几场，默认 8）
 ```
 
 ---

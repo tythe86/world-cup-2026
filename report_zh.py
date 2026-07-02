@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import os
 import sys
+import json
+import time
 import datetime as dt
 from collections import defaultdict
 from pathlib import Path
@@ -35,25 +37,25 @@ import predictor as P  # noqa: E402
 # ──────────────────────────────────────────────
 # BALLDONTLIE FIFA World Cup API
 # ──────────────────────────────────────────────
-API_BASE = "https://api.balldontlie.io/fifa/worldcup/v1"
+# openfootball 公开数据（免费、无需 key）：2026 世界杯完整赛程 + 真实比分
+OPENFOOTBALL_URL = (
+    "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
+)
 
-# BALLDONTLIE 球队名（FIFA 官方名）→ predictor 使用的 martj42 数据集队名
+# openfootball 队名 → predictor 使用的 martj42 数据集队名
 TEAM_NAME_ALIASES = {
-    "Korea Republic": "South Korea",
-    "Korea DPR": "South Korea",
-    "IR Iran": "Iran",
-    "Islamic Republic of Iran": "Iran",
+    "Bosnia & Herzegovina": "Bosnia and Herzegovina",
+    "Bosnia &amp; Herzegovina": "Bosnia and Herzegovina",
+    "Curaçao": "Curacao",
+    "Czech Republic": "Czechia",
     "Côte d'Ivoire": "Ivory Coast",
     "Cote d'Ivoire": "Ivory Coast",
+    "Korea Republic": "South Korea",
+    "South Korea": "South Korea",
+    "IR Iran": "Iran",
     "United States": "USA",
-    "Bosnia and Herzegovina": "Bosnia and Herzegovina",
     "Congo DR": "DR Congo",
-    "Congo (DR)": "DR Congo",
-    "Democratic Republic of the Congo": "DR Congo",
-    "Cape Verde Islands": "Cape Verde",
-    "Curaçao": "Curacao",
-    "Curacao": "Curacao",
-    "Czech Republic": "Czechia",
+    "DR Congo": "DR Congo",
 }
 
 # 球队中文名（覆盖全部 48 支参赛队 + 常见强队）
@@ -107,74 +109,85 @@ def normalize_team(raw: str) -> str:
     return raw
 
 
-def fetch_live_matches(api_key: str):
+def _is_placeholder(name: str) -> bool:
+    """openfootball 里未确定的淘汰赛对阵用 W80 / L101 之类的占位符。"""
+    import re
+    return bool(re.fullmatch(r"[WL]\d+", str(name or "").strip()))
+
+
+def _to_beijing(date_s: str, time_s: str):
+    """openfootball 的 time 形如 '13:00 UTC-6' → 换算成北京时间 datetime。"""
+    import re
+    m = re.match(r"(\d{1,2}):(\d{2})\s*UTC\s*([+-]?\d+)", str(time_s or ""))
+    if not m:
+        return None
+    hh, mm, off = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        local = dt.datetime.fromisoformat(str(date_s)[:10]).replace(hour=hh, minute=mm)
+    except Exception:
+        return None
+    return (local - dt.timedelta(hours=off)) + dt.timedelta(hours=8)  # UTC→北京
+
+
+# openfootball 本地缓存（网络抖动时回退用）
+_OF_CACHE = Path(__file__).resolve().parent / "data" / "openfootball_2026.json"
+
+
+def _fetch_of_json():
+    """拉取 openfootball 2026 数据，带重试；全部失败则回退到本地缓存。"""
+    last_err = None
+    for attempt in range(3):
+        try:
+            r = requests.get(OPENFOOTBALL_URL, timeout=(10, 30))
+            r.raise_for_status()
+            data = r.json()
+            _OF_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            _OF_CACHE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            return data
+        except Exception as e:
+            last_err = e
+            print(f"  ⚠️ openfootball 拉取第 {attempt + 1}/3 次失败：{type(e).__name__}")
+            time.sleep(2)
+    if _OF_CACHE.exists():
+        print(f"  ↩️  改用本地缓存（最近一次错误：{last_err}）")
+        return json.loads(_OF_CACHE.read_text(encoding="utf-8"))
+    raise last_err
+
+
+def fetch_openfootball_upcoming(today, days_ahead: int = 5, limit: int = 8):
     """
-    拉取 BALLDONTLIE 2026 赛季全部比赛。
-    返回 (matches_list, status_str)。失败抛异常由调用方捕获。
+    从 openfootball 拉取 2026 世界杯「未踢且双方均已确定」的 upcoming 比赛。
+    以【北京时间】判断是否在未来 days_ahead 天内。返回 (list, status_str)。
     """
-    headers = {"Authorization": api_key, "Accept": "application/json"}
-    session = requests.Session()
-    session.headers.update(headers)
+    data = _fetch_of_json()
+    matches = data.get("matches", [])
 
-    all_matches = []
-    cursor = 0
-    # 翻页：API 支持 per_page + cursor/next_cursor
-    url = f"{API_BASE}/matches"
-    for _ in range(20):  # 安全上限，避免死循环
-        params = {"season": 2026, "per_page": 100}
-        if cursor:
-            params["cursor"] = cursor
-        r = session.get(url, params=params, timeout=30)
-        if r.status_code == 401:
-            raise PermissionError("API key 鉴权失败（401 Unauthorized）")
-        r.raise_for_status()
-        data = r.json()
-        page = data.get("data") or data.get("matches") or []
-        all_matches.extend(page)
-        meta = data.get("meta") or {}
-        cursor = meta.get("next_cursor")
-        if not cursor or not page:
-            break
-    return all_matches, f"已拉取 {len(all_matches)} 场实时赛程"
-
-
-def extract_team_name(side) -> str:
-    """home_team/away_team 可能是 dict 或 str。"""
-    if isinstance(side, dict):
-        return side.get("name") or side.get("full_name") or ""
-    return str(side or "")
-
-
-def upcoming_from_live(live_matches, today, limit=8):
-    """从实时赛程里挑出今天及之后未开始的比赛。"""
-    UPCOMING = {"scheduled", "upcoming", "not_started", "pre"}
+    horizon = today + dt.timedelta(days=days_ahead)
     picked = []
-    for m in live_matches:
-        status = str(m.get("status", "")).lower()
-        if status and status not in UPCOMING:
+    for m in matches:
+        if (m.get("score") or {}).get("ft") is not None:        # 已踢
             continue
-        # 解析日期（去掉时区后比较）
-        d = m.get("date") or m.get("start_date") or m.get("datetime")
-        mdate = None
-        if d:
-            try:
-                mdate = dt.datetime.fromisoformat(str(d).replace("Z", "+00:00"))
-            except Exception:
-                mdate = None
-        if mdate and mdate.date() < today:
+        t1, t2 = m.get("team1"), m.get("team2")
+        if _is_placeholder(t1) or _is_placeholder(t2):
             continue
-        home = normalize_team(extract_team_name(m.get("home_team")))
-        away = normalize_team(extract_team_name(m.get("away_team")))
+        bj = _to_beijing(m.get("date"), m.get("time"))
+        if not bj:
+            continue
+        if bj.date() < today or bj.date() > horizon:             # 按北京时间过滤
+            continue
+        home, away = normalize_team(t1), normalize_team(t2)
         if not home or not away or home == away:
             continue
         picked.append({
             "home": home, "away": away,
-            "stage": m.get("stage") or m.get("round") or "",
-            "date": str(d)[:10] if d else "",
+            "stage": m.get("round") or "",
+            "date": bj.strftime("%Y-%m-%d"),
+            "bj": bj.strftime("%m-%d %H:%M"),                    # 北京时间开赛
         })
-        if len(picked) >= limit:
-            break
-    return picked
+
+    picked.sort(key=lambda x: x["bj"])
+    picked = picked[:limit]
+    return picked, f"openfootball 实时赛程，共 {len(picked)} 场未踢（未来 {days_ahead} 天，按北京时间）"
 
 
 # ──────────────────────────────────────────────
@@ -273,9 +286,10 @@ def render_championship(sim, top_k=12) -> str:
 def main():
     today = dt.date.today()
     now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-    api_key = (os.environ.get("BALLDONTLIE_API_KEY") or "").strip()
     sim_runs = int(os.environ.get("SIM_RUNS", "3000"))
     top_n = int(os.environ.get("TOP_N", "20"))
+    days_ahead = int(os.environ.get("DAYS_AHEAD", "5"))
+    max_predict = int(os.environ.get("MAX_PREDICT", "8"))
 
     # 1. 跑通模型流水线
     print("▶ 加载历史数据 …", flush=True)
@@ -289,32 +303,30 @@ def main():
     # 2. 实力排名
     top = elo.top_n(top_n)
 
-    # 3. 比赛预测：优先实时赛程
+    # 3. 比赛预测：优先 openfootball 实时赛程（免费、无需 key）
     matches_to_predict = []
-    live_status = "未配置 `BALLDONTLIE_API_KEY`，使用内置重点对决"
+    live_status = "实时赛程不可用，使用内置重点对决"
     live_note = ""
-    if api_key:
-        try:
-            live_matches, info = fetch_live_matches(api_key)
+    try:
+        upcoming, info = fetch_openfootball_upcoming(today, days_ahead=days_ahead,
+                                                     limit=max_predict)
+        if upcoming:
+            matches_to_predict = upcoming
             live_status = info
-            upcoming = upcoming_from_live(live_matches, today, limit=8)
-            if upcoming:
-                matches_to_predict = upcoming
-                live_note = "（数据来源：BALLDONTLIE 实时赛程）"
-            else:
-                live_note = "（已拉取实时赛程，但近期没有未开始的比赛，回退到内置重点对决）"
-        except PermissionError as e:
-            live_status = f"⚠️ 实时赛程不可用：{e}。已回退到内置重点对决。"
-        except Exception as e:
-            live_status = f"⚠️ 实时赛程拉取失败：{type(e).__name__}: {e}。已回退到内置重点对决。"
+            live_note = "（数据来源：openfootball，免费、无需 key）"
+        else:
+            live_status = "实时赛程近期无未踢比赛，使用内置重点对决"
+            live_note = "（openfootball 已拉取，但未来窗口内无对阵已定的比赛）"
+    except Exception as e:
+        live_status = f"⚠️ 实时赛程拉取失败：{type(e).__name__}: {e}。已回退到内置重点对决。"
 
     if not matches_to_predict:
         # 回退：一组看点十足的对决（覆盖各洲强队）
         matches_to_predict = [
-            {"home": "Brazil", "away": "Germany", "stage": "焦点对决", "date": "", "city": ""},
-            {"home": "France", "away": "Argentina", "stage": "焦点对决", "date": "", "city": ""},
-            {"home": "England", "away": "Spain", "stage": "焦点对决", "date": "", "city": ""},
-            {"home": "Portugal", "away": "Netherlands", "stage": "焦点对决", "date": "", "city": ""},
+            {"home": "Brazil", "away": "Germany", "stage": "焦点对决", "date": ""},
+            {"home": "France", "away": "Argentina", "stage": "焦点对决", "date": ""},
+            {"home": "England", "away": "Spain", "stage": "焦点对决", "date": ""},
+            {"home": "Portugal", "away": "Netherlands", "stage": "焦点对决", "date": ""},
         ]
 
     predictions = []
@@ -322,8 +334,12 @@ def main():
         try:
             pred = P.predict_match(m["home"], m["away"], elo, model, feat_df,
                                    neutral=True, is_wc=True)
+            # xG 在双方实力悬殊时会算出虚高值，截到合理上限
+            pred["xg_home"] = round(min(pred["xg_home"], 4.0), 2)
+            pred["xg_away"] = round(min(pred["xg_away"], 4.0), 2)
             pred["stage"] = m.get("stage", "")
             pred["mdate"] = m.get("date", "")
+            pred["bj"] = m.get("bj", "")
             predictions.append(pred)
         except Exception as e:
             print(f"  跳过 {m['home']} vs {m['away']}：{e}")
@@ -346,9 +362,8 @@ def main():
     md.append("## 🔮 二、比赛预测\n")
     if predictions:
         for pred in predictions:
-            tag = ""
-            if pred.get("stage") or pred.get("mdate"):
-                tag = f"　_（{pred.get('stage','')} {pred.get('mdate','')}）_".strip()
+            when = pred.get("bj") or pred.get("mdate", "")
+            tag = f"　_（{pred.get('stage', '')} · 北京时间 {when}）_" if when else ""
             md.append(f"**{cn(pred['home'])} {pred['home']} — {pred['away']} {cn(pred['away'])}**{tag}\n")
             md.append(render_prediction(pred))
     else:
@@ -363,7 +378,7 @@ def main():
     md.append("- Elo 评分随每场比赛动态更新，世界杯比赛权重最高（k=60）。")
     md.append("- 胜率由 XGBoost 多分类模型给出（主胜 / 平 / 客胜）；xG 为基于状态与 Elo 的预期进球估计。")
     md.append("- 夺冠概率来自全赛程蒙特卡洛模拟，含点球 50/50 近似。")
-    md.append("- 实时赛程通过 `BALLDONTLIE_API_KEY` 获取；未配置或失效时自动回退，不影响报告生成。")
+    md.append("- 实时赛程来自 openfootball（免费、无需 key，赛后更新）；拉取失败时自动回退到内置重点对决。")
     md.append(f"\n_本报告由 GitHub Actions 每日自动生成。_\n")
 
     report = "\n".join(md)

@@ -42,10 +42,11 @@ jobs:
 
       - name: 生成中文预测报告
         env:
-          BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
           SIM_RUNS: ${{ github.event.inputs.sim_runs || '10000' }}
           TOP_N: '20'
-          MPLBACKEND: Agg   # 无显示环境下的 matplotlib 后端
+          DAYS_AHEAD: '5'    # 预测未来多少天内的比赛
+          MAX_PREDICT: '8'   # 最多预测多少场
+          MPLBACKEND: Agg    # 无显示环境下的 matplotlib 后端
         run: python report_zh.py
 
       - name: 写入本次运行的摘要（Actions 页面可直接看）
