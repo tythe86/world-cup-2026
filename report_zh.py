@@ -156,8 +156,9 @@ def fetch_openfootball_upcoming(today, days_ahead: int = 5, limit: int = 8):
 
     horizon = today + dt.timedelta(days=days_ahead)
     picked = []
+    beijing_now = dt.datetime.utcnow() + dt.timedelta(hours=8)   # 不依赖机器时区
     for m in matches:
-        if (m.get("score") or {}).get("ft") is not None:        # 已踢
+        if (m.get("score") or {}).get("ft") is not None:        # 已踢完
             continue
         t1, t2 = m.get("team1"), m.get("team2")
         if _is_placeholder(t1) or _is_placeholder(t2):
@@ -165,7 +166,9 @@ def fetch_openfootball_upcoming(today, days_ahead: int = 5, limit: int = 8):
         bj = _to_beijing(m.get("date"), m.get("time"))
         if not bj:
             continue
-        if bj.date() < today or bj.date() > horizon:             # 按北京时间过滤
+        if bj < beijing_now:                                     # 已开赛/进行中 → 不预测
+            continue
+        if bj.date() < today or bj.date() > horizon:            # 按北京时间日期窗口
             continue
         home, away = normalize_team(t1), normalize_team(t2)
         if not home or not away or home == away:

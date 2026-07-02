@@ -3,8 +3,8 @@ name: 每日世界杯预测报告（中文）
 # 触发条件：每天定时 + 手动
 on:
   schedule:
-    # UTC 23:07 ≈ 北京时间次日 07:07（避开整点高峰，减少 GitHub cron 延迟）
-    - cron: '7 23 * * *'
+    # UTC 04:07 ≈ 北京时间 12:07（每天中午 12 点左右；分钟错开整点以减少 GitHub cron 延迟）
+    - cron: '7 4 * * *'
   workflow_dispatch:
     inputs:
       sim_runs:
@@ -45,7 +45,7 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}   # The Odds API（可选，免费 key）
           SIM_RUNS: ${{ github.event.inputs.sim_runs || '10000' }}
           TOP_N: '20'
-          DAYS_AHEAD: '5'    # 预测未来多少天内的比赛
+          DAYS_AHEAD: '1'    # 只预测未来 1 天内的比赛
           MAX_PREDICT: '8'   # 最多预测多少场
           MPLBACKEND: Agg    # 无显示环境下的 matplotlib 后端
         run: python report_zh.py

@@ -35,7 +35,7 @@ Charts are saved to the `visuals/` folder — ready to use in videos.
 
 - **最新报告**：[`reports/预测报告.md`](reports/预测报告.md)
 - **历史归档**：[`reports/archive/`](reports/archive)
-- **定时**：每天北京时间约 07:07 自动执行（cron `7 23 * * *` UTC）
+- **定时**：每天北京时间约 **12:07**（中午）自动执行（cron `7 4 * * *` UTC）——午间盘口更新，只预测未来 1 天未开赛的比赛
 - **手动触发**：在仓库 **Actions** 页面选 `每日世界杯预测报告（中文）` → `Run workflow`
 - **查看本次运行的报告**：点开对应的 Action 运行，摘要（Summary）里直接渲染完整中文报告
 
