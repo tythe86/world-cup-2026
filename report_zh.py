@@ -222,6 +222,41 @@ def fetch_openfootball_upcoming(today, days_ahead: int = 5, limit: int = 8):
     return picked, f"openfootball 实时赛程，共 {len(picked)} 场未踢（未来 {days_ahead} 天，按北京时间）"
 
 
+def fetch_worldcup_alive_teams():
+    """
+    依据 openfootball 已完成的淘汰赛结果，返回【仍在争冠】的球队集合。
+    规则：进入淘汰赛（Round of 32 起）的队为候选；任一已完成的淘汰赛里
+    输掉的一方即被淘汰。胜负判定优先级：点球 p > 加时 et > 常规 ft。
+    无法判定或异常时返回 None（调用方回退到全部球队）。
+    """
+    KNOCKOUT = ("round of 32", "round of 16", "quarter-final", "semi-final", "final")
+    data = _fetch_of_json()
+    participants, eliminated = set(), set()
+    for m in data.get("matches", []):
+        rnd = str(m.get("round") or "").lower()
+        if not any(k in rnd for k in KNOCKOUT):
+            continue
+        t1, t2 = m.get("team1"), m.get("team2")
+        if _is_placeholder(t1) or _is_placeholder(t2):
+            continue
+        h, a = normalize_team(t1), normalize_team(t2)
+        participants.add(h)
+        participants.add(a)
+        s = m.get("score") or {}
+        if s.get("ft") is None:
+            continue                       # 未踢：两队仍为候选
+        loser = None
+        for key in ("p", "et", "ft"):      # 点球 > 加时 > 常规
+            v = s.get(key)
+            if isinstance(v, (list, tuple)) and len(v) == 2 and v[0] != v[1]:
+                loser = a if v[0] > v[1] else h
+                break
+        if loser:
+            eliminated.add(loser)
+    alive = participants - eliminated
+    return alive if len(alive) >= 2 else None
+
+
 # The Odds API（免费 500 次/月）：世界杯 h2h 赔率，反推市场隐含概率
 ODDS_URL = "https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds/"
 
@@ -280,15 +315,20 @@ def fetch_odds(api_key: str):
 PUSHPLUS_URL = "http://www.pushplus.plus/send"
 
 
-def push_to_wechat(token: str, title: str, content: str, template: str = "markdown") -> str:
-    """通过 PushPlus 把报告推送到微信。template 可选 'markdown' / 'html'。返回结果说明。"""
+def push_to_wechat(token: str, title: str, content: str, template: str = "markdown",
+                   summary: str = "") -> str:
+    """通过 PushPlus 把报告推送到微信。template 可选 'markdown' / 'html'；
+    summary 为消息摘要（通知预览/转发卡片用；HTML 模板务必提供，否则预览会抓到 HTML 头部代码）。"""
     if not token:
         return "未配置 PUSHPLUS_TOKEN，跳过微信推送"
     try:
-        r = requests.post(PUSHPLUS_URL, json={
+        payload = {
             "token": token, "title": title, "content": content,
             "template": template, "channel": "wechat",
-        }, timeout=30)
+        }
+        if summary:
+            payload["summary"] = summary
+        r = requests.post(PUSHPLUS_URL, json=payload, timeout=30)
         data = r.json()
         if data.get("code") == 200:
             return "已推送到微信（PushPlus）"
@@ -373,7 +413,7 @@ def render_prediction(pred) -> str:
     return "\n".join(lines)
 
 
-def simulate_tournament_fast(elo, model, feat_df, n_sims: int = 3000):
+def simulate_tournament_fast(elo, model, feat_df, n_sims: int = 3000, alive_teams=None):
     """
     与 predictor.simulate_tournament 数学等价，但快得多。
 
@@ -384,6 +424,11 @@ def simulate_tournament_fast(elo, model, feat_df, n_sims: int = 3000):
     print(f"\n🏆  运行 {n_sims:,} 次锦标赛模拟（快速版：预计算对阵概率）…")
 
     all_teams = sorted(set(normalize_team(t) for m in P.WC2026_MATCHES for t in (m[0], m[1])))
+    if alive_teams:                        # 只模拟仍在争冠的球队，剔除已淘汰者
+        before = len(all_teams)
+        all_teams = sorted(t for t in all_teams if t in alive_teams)
+        if before > len(all_teams):
+            print(f"  ℹ️ 仅模拟 {len(all_teams)} 支仍在争冠的球队（已排除 {before - len(all_teams)} 支被淘汰队）")
 
     # 预计算每一对（有序）对阵的 [主胜, 平, 客胜] 概率
     cache: dict[tuple[str, str], tuple[float, float, float]] = {}
@@ -463,6 +508,7 @@ table.grid tr:last-child td{border-bottom:none;}
 .scoreline{margin:4px 0 10px;font-size:13px;}
 .bigscore{font-size:20px;color:#0a7d3c;margin-left:6px;vertical-align:-1px;}
 .bars{margin:6px 0 10px;}
+.bar-title{font-size:11px;color:#8a9099;font-weight:600;margin:2px 0;}
 .bar-row{display:block;margin:6px 0;font-size:13px;}
 .bar-label{display:inline-block;width:14%;vertical-align:middle;color:#555;}
 .bar-track{display:inline-block;vertical-align:middle;height:14px;background:#eef1f4;border-radius:7px;overflow:hidden;}
@@ -473,6 +519,21 @@ ul.notes{margin:6px 0 0;padding-left:18px;font-size:12.5px;color:#666;}
 ul.notes li{margin:4px 0;}
 .footer{text-align:center;color:#aab0b6;font-size:11px;margin:14px 0 4px;}
 """
+
+
+def build_digest(predictions, sim, max_games: int = 5) -> str:
+    """一句话摘要：预测比分 + 夺冠概率前三。用于微信转发卡片 / 通知摘要（避免抓到 HTML 头）。"""
+    bits = []
+    if predictions:
+        games = []
+        for p in predictions[:max_games]:
+            s, _ = predicted_scoreline(p["xg_home"], p["xg_away"])
+            games.append(f"{cn(p['home'])}{s}{cn(p['away'])}")
+        bits.append("预测 " + "、".join(games))
+    if len(sim):
+        names = [f"{cn(r.team)} {r.championship_prob:.0f}%" for r in sim.head(3).itertuples()]
+        bits.append("夺冠概率 " + "、".join(names))
+    return " ｜ ".join(bits)
 
 
 def _h(s) -> str:
@@ -508,12 +569,19 @@ def render_html_summary(predictions) -> str:
         when = pred.get("bj") or pred.get("mdate") or "—"
         model = (f'{pred["p_home"]*100:.0f} / {pred["p_draw"]*100:.0f} / '
                  f'{pred["p_away"]*100:.0f}')
+        o = pred.get("odds")
+        if o:   # 有市场赔率时，在模型概率下用小字附上市场概率（不加列，避免拥挤）
+            cell = (f'{model}<br><span class="muted" style="font-size:11px">'
+                    f'市 {o["imp_home"]:.0f}/{o["imp_draw"]:.0f}/{o["imp_away"]:.0f}</span>')
+        else:
+            cell = model
         rows.append(
             f'<tr><td class="t">{_h(when)}</td><td class="l">{match}</td>'
-            f'<td class="score">{_h(score)}</td><td>{model}</td></tr>'
+            f'<td class="score">{_h(score)}</td><td>{cell}</td></tr>'
         )
     return ('<table class="grid"><thead><tr>'
-            '<th>北京时间</th><th class="l">对阵</th><th>预测比分</th><th>主/平/客 %</th>'
+            '<th>北京时间</th><th class="l">对阵</th><th>预测比分</th>'
+            '<th>主/平/客 %<br><span class="muted" style="font-weight:400;font-size:10px">模型/市场</span></th>'
             '</tr></thead><tbody>' + "\n".join(rows) + '</tbody></table>')
 
 
@@ -536,19 +604,19 @@ def render_html_match(pred) -> str:
     when = pred.get("bj") or pred.get("mdate") or ""
     stage = pred.get("stage", "")
     sub = " · ".join(x for x in [stage, (f"北京时间 {when}" if when else "")] if x)
-    bars = (
-        _prob_bar("主胜", pred["p_home"] * 100, "#0fae57")
-        + _prob_bar("平局", pred["p_draw"] * 100, "#d97706")
-        + _prob_bar("客胜", pred["p_away"] * 100, "#2563eb")
-    )
+    bars = ('<div class="bar-title">模型预测</div>'
+            + _prob_bar("主胜", pred["p_home"] * 100, "#0fae57")
+            + _prob_bar("平局", pred["p_draw"] * 100, "#d97706")
+            + _prob_bar("客胜", pred["p_away"] * 100, "#2563eb"))
     o = pred.get("odds")
     odds_line = ""
-    if o:
-        odds_line = (
-            f'<div class="kv">💰 市场赔率反推：{_team_html(home)} {o["imp_home"]:.0f}% / '
-            f'平 {o["imp_draw"]:.0f}% / {_team_html(away)} {o["imp_away"]:.0f}% '
-            f'<span class="muted">（{o["ph"]}/{o["pd"]}/{o["pa"]}）</span></div>'
-        )
+    if o:   # 市场赔率：灰色条并列，与模型对照；赔率数值小字附后
+        bars += ('<div class="bar-title" style="margin-top:8px">市场赔率反推</div>'
+                 + _prob_bar("主胜", o["imp_home"], "#9aa0a6")
+                 + _prob_bar("平局", o["imp_draw"], "#c8ccd1")
+                 + _prob_bar("客胜", o["imp_away"], "#9aa0a6"))
+        odds_line = (f'<div class="muted" style="font-size:11px;margin:-2px 0 6px">'
+                     f'赔率 主 {o["ph"]} / 平 {o["pd"]} / 客 {o["pa"]}</div>')
     return (
         '<div class="match">'
         f'<div class="match-head">{_team_html(home)} <span class="vs">VS</span> {_team_html(away)}</div>'
@@ -581,17 +649,22 @@ def render_html_championship(sim, top_k: int = 12) -> str:
 
 
 def render_html_report(now_str, live_status, live_note, odds_status,
-                       predictions, top, sim, sim_runs) -> str:
+                       predictions, top, sim, sim_runs, alive_note="", digest="") -> str:
     """组装完整的微信 HTML 报告。"""
     has_pred = bool(predictions)
     P = []  # noqa: E741  一段一段拼，可读性优先
+    title_text = "⚽ 2026 世界杯 AI 每日预测报告"
     P.append('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
              '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">'
+             f'<title>{_h(title_text)}</title>'
+             f'<meta name="description" content="{_h(digest)}">'
+             f'<meta property="og:title" content="{_h(title_text)}">'
+             f'<meta property="og:description" content="{_h(digest)}">'
              f'<style>{_HTML_CSS}</style></head><body><div class="wrap">')
 
     # 顶部标题卡
     hdr = ['<div class="hdr"><h1>⚽ 2026 世界杯 AI 每日预测报告</h1>'
-           f'<p>🕒 生成时间 {_h(now_str)} ｜ 模型 Elo + XGBoost（5 万+ 历史比赛）</p>']
+           f'<p>🕒 生成时间（北京）{_h(now_str)} ｜ 模型 Elo + XGBoost（5 万+ 历史比赛）</p>']
     if live_status:
         note = f" {_h(live_note)}" if live_note else ""
         hdr.append(f'<p>📋 {_h(live_status)}{note}</p>')
@@ -619,16 +692,19 @@ def render_html_report(now_str, live_status, live_note, odds_status,
 
     # 四、夺冠概率
     i = "四" if has_pred else "三"
-    P.append(f'<div class="card"><h2>🏆 {i}、夺冠概率模拟（蒙特卡洛 {sim_runs:,} 次）</h2>'
-             + render_html_championship(sim) + '</div>')
+    champ = f'<div class="card"><h2>🏆 {i}、夺冠概率模拟（蒙特卡洛 {sim_runs:,} 次）</h2>'
+    if alive_note:
+        champ += f'<p class="muted" style="margin:-2px 0 8px">{_h(alive_note)}</p>'
+    champ += render_html_championship(sim) + '</div>'
+    P.append(champ)
 
     # 说明
     P.append('<div class="card"><h2>📌 说明</h2><ul class="notes">'
              '<li>Elo 评分随每场比赛动态更新，世界杯比赛权重最高（k=60）。</li>'
              '<li>胜率由 XGBoost 多分类模型给出（主胜 / 平 / 客胜）；xG 为基于状态与 Elo 的预期进球估计。</li>'
-             '<li>夺冠概率来自全赛程蒙特卡洛模拟，含点球 50/50 近似。</li>'
-             '<li>实时赛程来自 openfootball（免费、无需 key）；拉取失败时回退到内置重点对决。</li>'
-             '<li>市场赔率来自 The Odds API，取多家均值并去水反推为隐含概率；未配置 key 时省略。</li>'
+             '<li>夺冠概率来自蒙特卡洛模拟，仅含仍在争冠的球队（已在淘汰赛出局者已剔除），含点球 50/50 近似。</li>'
+             '<li>实时赛程与赛果来自 openfootball；拉取失败时回退到内置重点对决。</li>'
+             '<li>市场赔率来自 The Odds API，取多家均值并去水反推为隐含概率。</li>'
              '</ul></div>')
 
     P.append('<div class="footer">— 本报告由 GitHub Actions 每日自动生成 —</div>')
@@ -641,8 +717,9 @@ def render_html_report(now_str, live_status, live_note, odds_status,
 # ──────────────────────────────────────────────
 
 def main():
-    today = dt.date.today()
-    now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    _bj_now = dt.datetime.utcnow() + dt.timedelta(hours=8)   # CI 运行在 UTC，统一按北京时间
+    today = _bj_now.date()
+    now_str = _bj_now.strftime("%Y-%m-%d %H:%M")
     sim_runs = int(os.environ.get("SIM_RUNS", "3000"))
     top_n = int(os.environ.get("TOP_N", "20"))
     days_ahead = int(os.environ.get("DAYS_AHEAD", "5"))
@@ -670,7 +747,7 @@ def main():
         if upcoming:
             matches_to_predict = upcoming
             live_status = info
-            live_note = "（数据来源：openfootball，免费、无需 key）"
+            live_note = ""   # live_status 已说明来自 openfootball，不重复
         else:
             live_status = "实时赛程近期无未踢比赛，使用内置重点对决"
             live_note = "（openfootball 已拉取，但未来窗口内无对阵已定的比赛）"
@@ -709,13 +786,21 @@ def main():
             pred["odds"] = odds_map.get(frozenset({pred["home"], pred["away"]}))
 
     # 4. 蒙特卡洛夺冠模拟（快速版：预计算对阵概率，避免万次全表扫描）
+    #    只模拟【仍在争冠】的球队 —— 已在淘汰赛出局的队不再参与
+    alive_teams, alive_note = None, ""
+    try:
+        alive_teams = fetch_worldcup_alive_teams()
+        if alive_teams:
+            alive_note = f"仅含 {len(alive_teams)} 支仍在争冠的球队（已剔除出局者）"
+    except Exception as e:
+        print(f"  ⚠️ 无法确定淘汰状态，按全部球队模拟：{e}")
     print(f"▶ 蒙特卡洛模拟（{sim_runs:,} 次）…", flush=True)
-    sim = simulate_tournament_fast(elo, model, feat_df, n_sims=sim_runs)
+    sim = simulate_tournament_fast(elo, model, feat_df, n_sims=sim_runs, alive_teams=alive_teams)
 
     # 5. 渲染 Markdown
     md = []
     md.append(f"# ⚽ 2026 世界杯 AI 每日预测报告\n")
-    md.append(f"> 生成时间：**{now_str}** ｜ 模型：Elo + XGBoost（5 万+ 历史比赛训练）\n")
+    md.append(f"> 生成时间：**{now_str}**（北京时间）｜ 模型：Elo + XGBoost（5 万+ 历史比赛训练）\n")
     md.append(f"> 数据说明：{live_status} {live_note}\n")
     if odds_status:
         md.append(f"> 赔率：{odds_status}\n")
@@ -744,15 +829,17 @@ def main():
     md.append("\n---\n")
 
     md.append(f"## 🏆 {'四' if predictions else '三'}、夺冠概率模拟（蒙特卡洛 {sim_runs:,} 次）\n")
+    if alive_note:
+        md.append(f"> _{alive_note}_\n")
     md.append(render_championship(sim))
     md.append("\n---\n")
 
     md.append("## 📌 说明\n")
     md.append("- Elo 评分随每场比赛动态更新，世界杯比赛权重最高（k=60）。")
     md.append("- 胜率由 XGBoost 多分类模型给出（主胜 / 平 / 客胜）；xG 为基于状态与 Elo 的预期进球估计。")
-    md.append("- 夺冠概率来自全赛程蒙特卡洛模拟，含点球 50/50 近似。")
-    md.append("- 实时赛程来自 openfootball（免费、无需 key，赛后更新）；拉取失败时自动回退到内置重点对决。")
-    md.append("- 市场赔率来自 [The Odds API](https://the-odds-api.com)（免费 key），取多家博彩公司均值并**去水**（去除 overround）反推为隐含概率。赔率已把伤病/阵容/资金面等新闻聚合在内，可与模型概率对照；未配置 key 时该列省略。")
+    md.append("- 夺冠概率来自蒙特卡洛模拟，仅含仍在争冠的球队（已在淘汰赛出局者已剔除），含点球 50/50 近似。")
+    md.append("- 实时赛程与赛果来自 openfootball；拉取失败时自动回退到内置重点对决。")
+    md.append("- 市场赔率来自 [The Odds API](https://the-odds-api.com)，取多家均值并去水反推为隐含概率，可与模型概率对照。")
     md.append(f"\n_本报告由 GitHub Actions 每日自动生成。_\n")
 
     report = "\n".join(md)
@@ -776,14 +863,15 @@ def main():
     pushplus_token = (os.environ.get("PUSHPLUS_TOKEN") or "").strip()
     n_matches = len(predictions)
     title = f"⚽ 2026世界杯AI预测 · {today.isoformat()}（{n_matches}场）"
+    digest = build_digest(predictions, sim)
     html_report = render_html_report(
         now_str=now_str, live_status=live_status, live_note=live_note,
         odds_status=odds_status, predictions=predictions,
-        top=top, sim=sim, sim_runs=sim_runs,
+        top=top, sim=sim, sim_runs=sim_runs, alive_note=alive_note, digest=digest,
     )
     # 本地存一份 HTML 预览，方便在浏览器里直接看推送效果
     (reports_dir / "preview_wechat.html").write_text(html_report, encoding="utf-8")
-    push_msg = push_to_wechat(pushplus_token, title, html_report, template="html")
+    push_msg = push_to_wechat(pushplus_token, title, html_report, template="html", summary=digest)
     print(f"📲 {push_msg}")
     return report
 
