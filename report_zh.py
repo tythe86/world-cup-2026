@@ -42,31 +42,31 @@ OPENFOOTBALL_URL = (
     "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
 )
 
-# openfootball 队名 → predictor 使用的 martj42 数据集队名
+# 队名归一化：各种口径（openfootball / 赛程 / FIFA 官方）→ 【历史数据集 martj42】的标准名
+# 关键：必须落到历史数据集的队名，否则 Elo 评分查不到（会默认成 1500）
 TEAM_NAME_ALIASES = {
+    "USA": "United States",
+    "Czechia": "Czech Republic",
+    "Curacao": "Curaçao",
     "Bosnia & Herzegovina": "Bosnia and Herzegovina",
     "Bosnia &amp; Herzegovina": "Bosnia and Herzegovina",
-    "Curaçao": "Curacao",
-    "Czech Republic": "Czechia",
+    "Bosnia-Herzegovina": "Bosnia and Herzegovina",
     "Côte d'Ivoire": "Ivory Coast",
     "Cote d'Ivoire": "Ivory Coast",
     "Korea Republic": "South Korea",
-    "South Korea": "South Korea",
     "IR Iran": "Iran",
-    "United States": "USA",
     "Congo DR": "DR Congo",
-    "DR Congo": "DR Congo",
 }
 
-# 球队中文名（覆盖全部 48 支参赛队 + 常见强队）
+# 球队中文名（覆盖全部 48 支参赛队 + 历史数据集中的别名 + 常见强队）
 TEAM_CN = {
     "Mexico": "墨西哥", "South Africa": "南非", "South Korea": "韩国",
-    "Czechia": "捷克", "Canada": "加拿大", "Switzerland": "瑞士",
+    "Czechia": "捷克", "Czech Republic": "捷克", "Canada": "加拿大", "Switzerland": "瑞士",
     "Qatar": "卡塔尔", "Bosnia and Herzegovina": "波黑",
     "Brazil": "巴西", "Morocco": "摩洛哥", "Haiti": "海地",
-    "Scotland": "苏格兰", "USA": "美国", "Paraguay": "巴拉圭",
+    "Scotland": "苏格兰", "USA": "美国", "United States": "美国", "Paraguay": "巴拉圭",
     "Australia": "澳大利亚", "Turkey": "土耳其", "Germany": "德国",
-    "Curacao": "库拉索", "Ivory Coast": "科特迪瓦", "Ecuador": "厄瓜多尔",
+    "Curacao": "库拉索", "Curaçao": "库拉索", "Ivory Coast": "科特迪瓦", "Ecuador": "厄瓜多尔",
     "Netherlands": "荷兰", "Japan": "日本", "Sweden": "瑞典",
     "Tunisia": "突尼斯", "Belgium": "比利时", "Egypt": "埃及",
     "Iran": "伊朗", "New Zealand": "新西兰", "Spain": "西班牙",
@@ -87,24 +87,16 @@ def cn(name: str) -> str:
     return TEAM_CN.get(name, name)
 
 
-# predictor 数据集里出现过的全部队名（含世界杯参赛队）
-WC_TEAM_NAMES = {t for m in P.WC2026_MATCHES for t in (m[0], m[1])}
-
-
 def normalize_team(raw: str) -> str:
-    """把 BALLDONTLIE 返回的队名归一化到 predictor 的队名空间。"""
+    """把各种口径的队名归一化到【历史数据集】队名（Elo 评分据此查找）。别名优先。"""
     if not raw:
         return raw
-    # 已是数据集里的标准名
-    if raw in WC_TEAM_NAMES or raw in TEAM_CN:
-        return raw
-    # 精确别名
-    if raw in TEAM_NAME_ALIASES:
+    raw = str(raw).strip()
+    if raw in TEAM_NAME_ALIASES:                       # 精确别名优先
         return TEAM_NAME_ALIASES[raw]
-    # 大小写 / 去重音近似
-    key = raw.strip().lower()
-    for alias, canonical in TEAM_NAME_ALIASES.items():
-        if alias.lower() == key:
+    low = raw.lower()
+    for alias, canonical in TEAM_NAME_ALIASES.items():  # 大小写 / HTML 实体近似
+        if alias.lower() == low:
             return canonical
     return raw
 
@@ -231,7 +223,7 @@ def simulate_tournament_fast(elo, model, feat_df, n_sims: int = 3000):
     """
     print(f"\n🏆  运行 {n_sims:,} 次锦标赛模拟（快速版：预计算对阵概率）…")
 
-    all_teams = sorted(set(t for m in P.WC2026_MATCHES for t in (m[0], m[1])))
+    all_teams = sorted(set(normalize_team(t) for m in P.WC2026_MATCHES for t in (m[0], m[1])))
 
     # 预计算每一对（有序）对阵的 [主胜, 平, 客胜] 概率
     cache: dict[tuple[str, str], tuple[float, float, float]] = {}
