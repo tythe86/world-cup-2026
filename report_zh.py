@@ -87,6 +87,43 @@ def cn(name: str) -> str:
     return TEAM_CN.get(name, name)
 
 
+# 球队国旗 emoji（按【历史数据集】标准名 / 归一化后的队名索引）
+# 英格兰/苏格兰/威尔士不是独立 ISO 国家，用 emoji 标签序列（现代微信/iOS/Android 均支持）
+TEAM_FLAG = {
+    "Algeria": "🇩🇿", "Argentina": "🇦🇷", "Australia": "🇦🇺", "Austria": "🇦🇹",
+    "Belgium": "🇧🇪", "Bosnia and Herzegovina": "🇧🇦", "Brazil": "🇧🇷",
+    "Cameroon": "🇨🇲", "Canada": "🇨🇦", "Cape Verde": "🇨🇻", "Chile": "🇨🇱",
+    "Colombia": "🇨🇴", "Croatia": "🇭🇷", "Curaçao": "🇨🇼",
+    "Czech Republic": "🇨🇿", "Denmark": "🇩🇰", "DR Congo": "🇨🇩",
+    "Ecuador": "🇪🇨", "Egypt": "🇪🇬", "England": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+    "France": "🇫🇷", "Germany": "🇩🇪", "Ghana": "🇬🇭", "Haiti": "🇭🇹",
+    "Iran": "🇮🇷", "Iraq": "🇮🇶", "Ivory Coast": "🇨🇮", "Italy": "🇮🇹",
+    "Japan": "🇯🇵", "Jordan": "🇯🇴", "Mexico": "🇲🇽", "Morocco": "🇲🇦",
+    "Netherlands": "🇳🇱", "New Zealand": "🇳🇿", "Nigeria": "🇳🇬",
+    "Norway": "🇳🇴", "Panama": "🇵🇦", "Paraguay": "🇵🇾", "Peru": "🇵🇪",
+    "Poland": "🇵🇱", "Portugal": "🇵🇹", "Qatar": "🇶🇦", "Russia": "🇷🇺",
+    "Saudi Arabia": "🇸🇦", "Scotland": "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "Senegal": "🇸🇳",
+    "Serbia": "🇷🇸", "South Africa": "🇿🇦", "South Korea": "🇰🇷",
+    "Spain": "🇪🇸", "Sweden": "🇸🇪", "Switzerland": "🇨🇭", "Tunisia": "🇹🇳",
+    "Turkey": "🇹🇷", "Ukraine": "🇺🇦", "United States": "🇺🇸",
+    "Uruguay": "🇺🇾", "Uzbekistan": "🇺🇿", "Wales": "🏴󠁧󠁢󠁷󠁬󠁳󠁿",
+}
+
+
+def flag(name: str) -> str:
+    """球队名 → 国旗 emoji，找不到返回空串。先归一化到标准名再查。"""
+    if not name:
+        return ""
+    canonical = TEAM_NAME_ALIASES.get(name, name)
+    return TEAM_FLAG.get(canonical) or TEAM_FLAG.get(name, "")
+
+
+def cn_flag(name: str) -> str:
+    """国旗 emoji + 中文名（用于纯文本 / Markdown 展示）。"""
+    f = flag(name)
+    return f"{f} {cn(name)}" if f else cn(name)
+
+
 def normalize_team(raw: str) -> str:
     """把各种口径的队名归一化到【历史数据集】队名（Elo 评分据此查找）。别名优先。"""
     if not raw:
@@ -243,14 +280,14 @@ def fetch_odds(api_key: str):
 PUSHPLUS_URL = "http://www.pushplus.plus/send"
 
 
-def push_to_wechat(token: str, title: str, content: str) -> str:
-    """通过 PushPlus 把 markdown 报告推送到微信。返回结果说明。"""
+def push_to_wechat(token: str, title: str, content: str, template: str = "markdown") -> str:
+    """通过 PushPlus 把报告推送到微信。template 可选 'markdown' / 'html'。返回结果说明。"""
     if not token:
         return "未配置 PUSHPLUS_TOKEN，跳过微信推送"
     try:
         r = requests.post(PUSHPLUS_URL, json={
             "token": token, "title": title, "content": content,
-            "template": "markdown", "channel": "wechat",
+            "template": template, "channel": "wechat",
         }, timeout=30)
         data = r.json()
         if data.get("code") == 200:
@@ -292,7 +329,7 @@ def render_summary(predictions) -> str:
                  "|---|---|:--:|---|---:|"]
     for pred in predictions:
         score, _ = predicted_scoreline(pred["xg_home"], pred["xg_away"])
-        match = f"{cn(pred['home'])} vs {cn(pred['away'])}"
+        match = f"{cn_flag(pred['home'])} vs {cn_flag(pred['away'])}"
         when = pred.get("bj") or pred.get("mdate") or "—"
         model = f"{pred['p_home']*100:.0f}% / {pred['p_draw']*100:.0f}% / {pred['p_away']*100:.0f}%"
         if has_odds:
@@ -301,7 +338,7 @@ def render_summary(predictions) -> str:
             lines.append(f"| {when} | {match} | **{score}** | {model} | {market} |")
         else:
             fav = pred["favorite"]
-            fav_tag = f"{cn(fav)} ({max(pred['p_home'],pred['p_draw'],pred['p_away'])*100:.0f}%)"
+            fav_tag = f"{cn_flag(fav)} ({max(pred['p_home'],pred['p_draw'],pred['p_away'])*100:.0f}%)"
             lines.append(f"| {when} | {match} | **{score}** | {fav_tag} | {model} |")
     return "\n".join(lines)
 
@@ -309,7 +346,7 @@ def render_summary(predictions) -> str:
 def render_rankings(top) -> str:
     lines = ["| 排名 | 球队 | Elo 评分 |", "|---:|:--|--:"]
     for i, row in enumerate(top.itertuples(), 1):
-        lines.append(f"| {i} | {cn(row.team)} ({row.team}) | {row.elo:.0f} |")
+        lines.append(f"| {i} | {cn_flag(row.team)} ({row.team}) | {row.elo:.0f} |")
     return "\n".join(lines)
 
 
@@ -317,7 +354,7 @@ def render_prediction(pred) -> str:
     home, away = pred["home"], pred["away"]
     fav = pred["favorite"]
     lines = [
-        f"#### 🏟️ {cn(home)} vs {cn(away)}",
+        f"#### 🏟️ {cn_flag(home)} vs {cn_flag(away)}",
         "",
         "| 结果 | 概率 |",
         "|:--|--:|",
@@ -390,8 +427,213 @@ def render_championship(sim, top_k=12) -> str:
     lines = ["| 排名 | 球队 | 夺冠概率 |", "|---:|:--|--:|"]
     for i, row in enumerate(sim.head(top_k).itertuples(), 1):
         medal = "🥇" if i == 1 else ("🥈" if i == 2 else ("🥉" if i == 3 else f"{i}"))
-        lines.append(f"| {medal} | {cn(row.team)} ({row.team}) | **{row.championship_prob:.1f}%** |")
+        lines.append(f"| {medal} | {cn_flag(row.team)} ({row.team}) | **{row.championship_prob:.1f}%** |")
     return "\n".join(lines)
+
+
+# ──────────────────────────────────────────────
+# 微信 HTML 报告（PushPlus template=html，样式可控、表格不挤）
+# ──────────────────────────────────────────────
+
+_HTML_CSS = """
+*{box-sizing:border-box;}
+body{margin:0;padding:0;background:#eef1f4;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#2b2f33;line-height:1.6;}
+.wrap{padding:10px;}
+.hdr{background:#0a7d3c;background:linear-gradient(135deg,#0a7d3c 0%,#13ae5d 100%);color:#fff;border-radius:14px;padding:18px 16px;}
+.hdr h1{margin:0 0 8px;font-size:19px;line-height:1.35;}
+.hdr p{margin:4px 0;font-size:13px;opacity:.94;}
+.card{background:#fff;border-radius:14px;padding:14px 12px 10px;margin-top:11px;}
+.card h2{margin:0 0 10px;font-size:16px;color:#0a7d3c;border-bottom:2px solid #eaf5ee;padding-bottom:7px;}
+table.grid{width:100%;border-collapse:collapse;font-size:14px;}
+table.grid th{background:#f0f7f1;color:#3a7d4f;font-weight:600;padding:8px 5px;font-size:13px;text-align:center;}
+table.grid td{padding:8px 5px;border-bottom:1px solid #f0f2f4;text-align:center;vertical-align:middle;}
+table.grid td.l,table.grid th.l{text-align:left;}
+table.grid tr:last-child td{border-bottom:none;}
+.t{white-space:nowrap;color:#666;font-size:12.5px;}
+.score{font-weight:700;color:#0a7d3c;font-size:15px;}
+.vs{color:#b8bec5;font-size:12px;margin:0 3px;font-weight:400;}
+.muted{color:#8a9099;font-size:12px;}
+.en{color:#aab0b6;font-size:11px;}
+.rk{color:#9aa0a6;font-weight:700;width:32px;}
+.elo{text-align:right;font-variant-numeric:tabular-nums;}
+.elo b{color:#2b2f33;}
+.match{background:#fafbfc;border:1px solid #eef1f4;border-radius:12px;padding:11px 12px;margin:9px 0;}
+.match-head{font-size:16px;font-weight:700;}
+.match-sub{margin:2px 0 8px;}
+.scoreline{margin:4px 0 10px;font-size:13px;}
+.bigscore{font-size:20px;color:#0a7d3c;margin-left:6px;vertical-align:-1px;}
+.bars{margin:6px 0 10px;}
+.bar-row{display:block;margin:6px 0;font-size:13px;}
+.bar-label{display:inline-block;width:14%;vertical-align:middle;color:#555;}
+.bar-track{display:inline-block;vertical-align:middle;height:14px;background:#eef1f4;border-radius:7px;overflow:hidden;}
+.bar-fill{display:block;height:100%;border-radius:7px;}
+.bar-val{display:inline-block;width:16%;text-align:right;vertical-align:middle;font-weight:600;font-variant-numeric:tabular-nums;color:#2b2f33;}
+.kv{font-size:13px;color:#444;margin:3px 0;}
+ul.notes{margin:6px 0 0;padding-left:18px;font-size:12.5px;color:#666;}
+ul.notes li{margin:4px 0;}
+.footer{text-align:center;color:#aab0b6;font-size:11px;margin:14px 0 4px;}
+"""
+
+
+def _h(s) -> str:
+    """HTML 转义（球队名 / 赛程文本安全起见）。"""
+    import html as _html
+    return _html.escape(str(s), quote=False)
+
+
+def _team_html(name: str) -> str:
+    """国旗 + 中文名（HTML 展示用）。"""
+    f = flag(name)
+    return f"{f} {cn(name)}" if f else cn(name)
+
+
+def _prob_bar(label: str, pct: float, color: str) -> str:
+    pct = max(0.0, min(100.0, pct))
+    return (
+        '<div class="bar-row">'
+        f'<span class="bar-label">{_h(label)}</span>'
+        f'<span class="bar-track" style="width:68%"><span class="bar-fill" style="width:{pct:.1f}%;background:{color}"></span></span>'
+        f'<span class="bar-val">{pct:.1f}%</span>'
+        '</div>'
+    )
+
+
+def render_html_summary(predictions) -> str:
+    """汇总表：只保留 4 列（时间 / 对阵 / 比分 / 主/平/客），手机端不挤。"""
+    rows = []
+    for pred in predictions:
+        score, _ = predicted_scoreline(pred["xg_home"], pred["xg_away"])
+        match = (f'{_team_html(pred["home"])} <span class="vs">VS</span> '
+                 f'{_team_html(pred["away"])}')
+        when = pred.get("bj") or pred.get("mdate") or "—"
+        model = (f'{pred["p_home"]*100:.0f} / {pred["p_draw"]*100:.0f} / '
+                 f'{pred["p_away"]*100:.0f}')
+        rows.append(
+            f'<tr><td class="t">{_h(when)}</td><td class="l">{match}</td>'
+            f'<td class="score">{_h(score)}</td><td>{model}</td></tr>'
+        )
+    return ('<table class="grid"><thead><tr>'
+            '<th>北京时间</th><th class="l">对阵</th><th>预测比分</th><th>主/平/客 %</th>'
+            '</tr></thead><tbody>' + "\n".join(rows) + '</tbody></table>')
+
+
+def render_html_rankings(top) -> str:
+    rows = []
+    for i, row in enumerate(top.itertuples(), 1):
+        rows.append(
+            f'<tr><td class="rk">{i}</td>'
+            f'<td class="l">{_team_html(row.team)} <span class="en">{_h(row.team)}</span></td>'
+            f'<td class="elo"><b>{row.elo:.0f}</b></td></tr>'
+        )
+    return ('<table class="grid"><thead><tr>'
+            '<th>排名</th><th class="l">球队</th><th>Elo</th>'
+            '</tr></thead><tbody>' + "\n".join(rows) + '</tbody></table>')
+
+
+def render_html_match(pred) -> str:
+    home, away, fav = pred["home"], pred["away"], pred["favorite"]
+    score, _ = predicted_scoreline(pred["xg_home"], pred["xg_away"])
+    when = pred.get("bj") or pred.get("mdate") or ""
+    stage = pred.get("stage", "")
+    sub = " · ".join(x for x in [stage, (f"北京时间 {when}" if when else "")] if x)
+    bars = (
+        _prob_bar("主胜", pred["p_home"] * 100, "#0fae57")
+        + _prob_bar("平局", pred["p_draw"] * 100, "#d97706")
+        + _prob_bar("客胜", pred["p_away"] * 100, "#2563eb")
+    )
+    o = pred.get("odds")
+    odds_line = ""
+    if o:
+        odds_line = (
+            f'<div class="kv">💰 市场赔率反推：{_team_html(home)} {o["imp_home"]:.0f}% / '
+            f'平 {o["imp_draw"]:.0f}% / {_team_html(away)} {o["imp_away"]:.0f}% '
+            f'<span class="muted">（{o["ph"]}/{o["pd"]}/{o["pa"]}）</span></div>'
+        )
+    return (
+        '<div class="match">'
+        f'<div class="match-head">{_team_html(home)} <span class="vs">VS</span> {_team_html(away)}</div>'
+        f'<div class="match-sub muted">{_h(sub)}</div>'
+        f'<div class="scoreline"><span class="muted">预测比分</span><b class="bigscore">{_h(score)}</b></div>'
+        f'<div class="bars">{bars}</div>'
+        f'<div class="kv">📈 预期进球 xG：{_team_html(home)} <b>{pred["xg_home"]:.2f}</b> – <b>{pred["xg_away"]:.2f}</b> {_team_html(away)}</div>'
+        f'<div class="kv">⚖️ Elo 评分：{_team_html(home)} {pred["elo_home"]:.0f} / {_team_html(away)} {pred["elo_away"]:.0f}</div>'
+        f'<div class="kv">🏅 最被看好：<b>{_team_html(fav)}</b></div>'
+        f'{odds_line}'
+        '</div>'
+    )
+
+
+def render_html_championship(sim, top_k: int = 12) -> str:
+    maxp = sim["championship_prob"].max() if len(sim) else 1.0
+    rows = []
+    for i, row in enumerate(sim.head(top_k).itertuples(), 1):
+        medal = "🥇" if i == 1 else ("🥈" if i == 2 else ("🥉" if i == 3 else str(i)))
+        w = row.championship_prob / maxp * 100 if maxp else 0
+        rows.append(
+            f'<tr><td class="rk">{medal}</td>'
+            f'<td class="l">{_team_html(row.team)}</td>'
+            f'<td><span class="bar-track" style="width:58%"><span class="bar-fill" style="width:{w:.1f}%;background:#f0a500"></span></span> '
+            f'<b style="margin-left:6px">{row.championship_prob:.1f}%</b></td></tr>'
+        )
+    return ('<table class="grid"><thead><tr>'
+            '<th>排名</th><th class="l">球队</th><th>夺冠概率</th>'
+            '</tr></thead><tbody>' + "\n".join(rows) + '</tbody></table>')
+
+
+def render_html_report(now_str, live_status, live_note, odds_status,
+                       predictions, top, sim, sim_runs) -> str:
+    """组装完整的微信 HTML 报告。"""
+    has_pred = bool(predictions)
+    P = []  # noqa: E741  一段一段拼，可读性优先
+    P.append('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+             '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">'
+             f'<style>{_HTML_CSS}</style></head><body><div class="wrap">')
+
+    # 顶部标题卡
+    hdr = ['<div class="hdr"><h1>⚽ 2026 世界杯 AI 每日预测报告</h1>'
+           f'<p>🕒 生成时间 {_h(now_str)} ｜ 模型 Elo + XGBoost（5 万+ 历史比赛）</p>']
+    if live_status:
+        note = f" {_h(live_note)}" if live_note else ""
+        hdr.append(f'<p>📋 {_h(live_status)}{note}</p>')
+    if odds_status:
+        hdr.append(f'<p>💰 {_h(odds_status)}</p>')
+    hdr.append('</div>')
+    P.append("".join(hdr))
+
+    # 一、汇总
+    if has_pred:
+        P.append('<div class="card"><h2>⚽ 一、比赛预测汇总</h2>'
+                 + render_html_summary(predictions)
+                 + '<p class="muted" style="margin-top:8px">预测比分由 xG 经 Poisson 分布取概率最高者，仅供参考。</p></div>')
+
+    # 二、实力排名
+    i = "二" if has_pred else "一"
+    P.append(f'<div class="card"><h2>📊 {i}、AI 实力排名（Elo Top {len(top)}）</h2>'
+             + render_html_rankings(top) + '</div>')
+
+    # 三、比赛预测（详细）
+    i = "三" if has_pred else "二"
+    body = "".join(render_html_match(p) for p in predictions) if has_pred \
+        else '<p class="muted">本期无可用比赛预测。</p>'
+    P.append(f'<div class="card"><h2>🔮 {i}、比赛预测（详细）</h2>{body}</div>')
+
+    # 四、夺冠概率
+    i = "四" if has_pred else "三"
+    P.append(f'<div class="card"><h2>🏆 {i}、夺冠概率模拟（蒙特卡洛 {sim_runs:,} 次）</h2>'
+             + render_html_championship(sim) + '</div>')
+
+    # 说明
+    P.append('<div class="card"><h2>📌 说明</h2><ul class="notes">'
+             '<li>Elo 评分随每场比赛动态更新，世界杯比赛权重最高（k=60）。</li>'
+             '<li>胜率由 XGBoost 多分类模型给出（主胜 / 平 / 客胜）；xG 为基于状态与 Elo 的预期进球估计。</li>'
+             '<li>夺冠概率来自全赛程蒙特卡洛模拟，含点球 50/50 近似。</li>'
+             '<li>实时赛程来自 openfootball（免费、无需 key）；拉取失败时回退到内置重点对决。</li>'
+             '<li>市场赔率来自 The Odds API，取多家均值并去水反推为隐含概率；未配置 key 时省略。</li>'
+             '</ul></div>')
+
+    P.append('<div class="footer">— 本报告由 GitHub Actions 每日自动生成 —</div>')
+    P.append('</div></body></html>')
+    return "\n".join(P)
 
 
 # ──────────────────────────────────────────────
@@ -495,7 +737,7 @@ def main():
         for pred in predictions:
             when = pred.get("bj") or pred.get("mdate", "")
             tag = f"　_（{pred.get('stage', '')} · 北京时间 {when}）_" if when else ""
-            md.append(f"**{cn(pred['home'])} {pred['home']} — {pred['away']} {cn(pred['away'])}**{tag}\n")
+            md.append(f"**{cn_flag(pred['home'])} ({pred['home']}) — {cn_flag(pred['away'])} ({pred['away']})**{tag}\n")
             md.append(render_prediction(pred))
     else:
         md.append("_本期无可用比赛预测。_\n")
@@ -530,11 +772,18 @@ def main():
     print("=" * 60)
     print(f"\n✅ 报告已写入：{latest}")
 
-    # 7. 推送到微信（PushPlus，可选）
+    # 7. 推送到微信（PushPlus，用 HTML 模板：表格带样式、胜率带进度条，手机端更美观）
     pushplus_token = (os.environ.get("PUSHPLUS_TOKEN") or "").strip()
     n_matches = len(predictions)
     title = f"⚽ 2026世界杯AI预测 · {today.isoformat()}（{n_matches}场）"
-    push_msg = push_to_wechat(pushplus_token, title, report)
+    html_report = render_html_report(
+        now_str=now_str, live_status=live_status, live_note=live_note,
+        odds_status=odds_status, predictions=predictions,
+        top=top, sim=sim, sim_runs=sim_runs,
+    )
+    # 本地存一份 HTML 预览，方便在浏览器里直接看推送效果
+    (reports_dir / "preview_wechat.html").write_text(html_report, encoding="utf-8")
+    push_msg = push_to_wechat(pushplus_token, title, html_report, template="html")
     print(f"📲 {push_msg}")
     return report
 
