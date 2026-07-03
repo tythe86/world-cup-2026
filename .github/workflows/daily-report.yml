@@ -3,8 +3,13 @@ name: 每日世界杯预测报告（中文）
 # 触发条件：每天定时 + 手动
 on:
   schedule:
-    # UTC 04:00 = 北京时间 12:00（每天中午 12 点准时推送）
+    # 北京时间 12:00 / 12:13 / 12:27 / 12:43 各试一次（= UTC 04:00 / 04:13 / 04:27 / 04:43）
+    # 因 GitHub cron 2026 年频繁漏触发/延迟，从 12 点起多次兜底；
+    # 配合下方「今日已推则跳过」守卫，保证只发一次微信（手动触发不受限=强制重推）。
     - cron: '0 4 * * *'
+    - cron: '13 4 * * *'
+    - cron: '27 4 * * *'
+    - cron: '43 4 * * *'
   workflow_dispatch:
     inputs:
       sim_runs:
@@ -29,29 +34,49 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      - name: 今天是否已推送过（仅定时去重；手动触发强制运行）
+        id: today
+        run: |
+          today=$(TZ='Asia/Shanghai' date '+%Y-%m-%d')
+          echo "date=$today" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "手动触发 → 强制运行。"
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          elif [ -f "reports/archive/报告_${today}.md" ]; then
+            echo "今天定时已成功推送过（归档已存在）→ 跳过，避免重复发微信。"
+            echo "already=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "今天尚未推送 → 正常运行。"
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 安装 Python
+        if: steps.today.outputs.already != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
       - name: 安装依赖
+        if: steps.today.outputs.already != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: 生成中文预测报告
+        if: steps.today.outputs.already != 'true'
         env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}   # The Odds API（可选，免费 key）
-          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}  # PushPlus 微信推送（可选）
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           SIM_RUNS: ${{ github.event.inputs.sim_runs || '10000' }}
           TOP_N: '20'
-          DAYS_AHEAD: '1'    # 只预测未来 1 天内的比赛
-          MAX_PREDICT: '8'   # 最多预测多少场
-          MPLBACKEND: Agg    # 无显示环境下的 matplotlib 后端
+          DAYS_AHEAD: '1'
+          MAX_PREDICT: '8'
+          MPLBACKEND: Agg
         run: python report_zh.py
 
       - name: 写入本次运行的摘要（Actions 页面可直接看）
+        if: steps.today.outputs.already != 'true'
         run: |
           {
             echo "# 📄 本次预测报告"
@@ -60,6 +85,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 提交报告回仓库
+        if: steps.today.outputs.already != 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -68,5 +94,6 @@ jobs:
             echo "报告无变化，跳过提交。"
           else
             git commit -m "🤖 自动更新每日预测报告 $(date -u +%Y-%m-%d) [skip ci]"
+            git pull --rebase origin main
             git push
-          
+          fi
