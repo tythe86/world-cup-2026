@@ -3,8 +3,8 @@ name: 每日世界杯预测报告（中文）
 # 触发条件：每天定时 + 手动
 on:
   schedule:
-    # UTC 04:07 ≈ 北京时间 12:07（每天中午 12 点左右；分钟错开整点以减少 GitHub cron 延迟）
-    - cron: '7 4 * * *'
+    # UTC 04:00 = 北京时间 12:00（每天中午 12 点准时推送）
+    - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
       sim_runs:
@@ -69,4 +69,4 @@ jobs:
           else
             git commit -m "🤖 自动更新每日预测报告 $(date -u +%Y-%m-%d) [skip ci]"
             git push
-          fi
+          
