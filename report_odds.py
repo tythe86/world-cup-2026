@@ -205,10 +205,11 @@ def fetch_h2h(key: str):
                     "last_update": bm.get("last_update", ""),
                 })
         if books:
-            books.sort(key=lambda b: b["key"])
-            # 同一家博彩公司在 eu/uk/us 多区会重复返回，按 key 去重只计一次
+            books.sort(key=lambda b: b["title"].lower())
+            # 同一家博彩公司在多区可能用不同 book_key 但同名返回，按 title 去重；
+            # 地区差异（如 Unibet (FR)/(UK)）title 不同，自然保留
             seen = set()
-            books = [b for b in books if not (b["key"] in seen or seen.add(b["key"]))]
+            books = [b for b in books if not (b["title"] in seen or seen.add(b["title"]))]
             matches.append({
                 "home": home, "away": away,
                 "commence": ev.get("commence_time", ""),
@@ -262,7 +263,7 @@ def fetch_outrights(key: str, sport_hits):
                                 continue
                             teams[t] = float(pr)
                         if len(teams) >= 2:
-                            dedup = (m.get("key", "?"), bm.get("key", "?"))
+                            dedup = (m.get("key", "?"), bm.get("title", bm.get("key", "?")))
                             if dedup in seen:
                                 continue
                             seen.add(dedup)
