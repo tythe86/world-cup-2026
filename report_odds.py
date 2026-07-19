@@ -206,6 +206,9 @@ def fetch_h2h(key: str):
                 })
         if books:
             books.sort(key=lambda b: b["key"])
+            # 同一家博彩公司在 eu/uk/us 多区会重复返回，按 key 去重只计一次
+            seen = set()
+            books = [b for b in books if not (b["key"] in seen or seen.add(b["key"]))]
             matches.append({
                 "home": home, "away": away,
                 "commence": ev.get("commence_time", ""),
@@ -223,6 +226,7 @@ def fetch_outrights(key: str, sport_hits):
     """
     raw_log = []
     pools = []
+    seen = set()                          # (market_key, book_key) 去重，避免多区/多入口重复
     candidates = [MAIN_SPORT] + [s.get("key") for s in sport_hits if s.get("key") != MAIN_SPORT]
     for sk in dict.fromkeys(candidates):              # 去重保序
         for mp in ("outrights", None):
@@ -258,6 +262,10 @@ def fetch_outrights(key: str, sport_hits):
                                 continue
                             teams[t] = float(pr)
                         if len(teams) >= 2:
+                            dedup = (m.get("key", "?"), bm.get("key", "?"))
+                            if dedup in seen:
+                                continue
+                            seen.add(dedup)
                             pools.append({
                                 "sport_key": sk,
                                 "market_key": m.get("key", "?"),
@@ -402,6 +410,7 @@ def main():
         if q2 and not quota:
             quota = q2
     md.append("## 🏟️ 一、决赛赔率（各家博彩公司对比 · 去水反推）\n")
+    md.append("_主胜/平/客胜为**常规时间 90 分钟**结果（平=进入加时点球）；去水后各家均值=共识。_\n")
     if matches:
         for mt in matches:
             md.extend(render_h2h_match(mt))
@@ -410,6 +419,7 @@ def main():
     md.append("\n---\n")
 
     md.append("## 🏆 二、夺冠赔率（市场隐含夺冠概率，替代蒙特卡洛）\n")
+    md.append("_outright = **捧杯概率**（含加时与点球），直接反推、替代模型蒙特卡洛。_\n")
     if pools:
         md.extend(render_outright(pools))
     else:
