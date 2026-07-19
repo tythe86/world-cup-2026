@@ -373,6 +373,92 @@ def render_outright(pools) -> list[str]:
     return lines
 
 
+# ──────────────────────────────────────────────
+# 微信推送（PushPlus，markdown 模板；token 来自 secret）
+# ──────────────────────────────────────────────
+PUSHPLUS_URL = "http://www.pushplus.plus/send"
+
+
+def push_to_wechat(token: str, title: str, content: str, summary: str = "") -> str:
+    """PushPlus 推送到微信（markdown 模板）。token 为空则跳过。"""
+    if not token:
+        return "未配置 PUSHPLUS_TOKEN，跳过微信推送"
+    try:
+        payload = {"token": token, "title": title, "content": content,
+                   "template": "markdown", "channel": "wechat"}
+        if summary:
+            payload["summary"] = summary
+        r = requests.post(PUSHPLUS_URL, json=payload, timeout=30)
+        d = r.json()
+        if d.get("code") == 200:
+            return "已推送到微信（PushPlus）"
+        return f"⚠️ 微信推送失败：{d.get('msg')}"
+    except Exception as e:
+        return f"⚠️ 微信推送异常：{type(e).__name__}: {e}"
+
+
+def _outright_consensus(pools):
+    """从 pools 取共识夺冠概率 [(team, pct), ...]，降序。"""
+    by_mkt = defaultdict(list)
+    for p in pools:
+        by_mkt[p["market_key"]].append(p)
+    if not by_mkt:
+        return []
+    chosen = by_mkt[max(by_mkt, key=lambda k: len(by_mkt[k]))]
+    tp = defaultdict(list)
+    for p in chosen:
+        inv = {t: 1 / pr for t, pr in p["teams"].items()}
+        tot = sum(inv.values())
+        for t, iv in inv.items():
+            tp[t].append(iv / tot * 100)
+    return sorted(((t, sum(v) / len(v)) for t, v in tp.items()), key=lambda x: -x[1])
+
+
+def build_wechat_md(matches, pools, now_str, quota) -> str:
+    """手机端精简版：outright 全表 + h2h 共识 + 代表性几家。"""
+    L = ["# ⚽ 世界杯 · 赔率版报告", ""]
+    L.append(f"> {now_str}（北京）｜ The Odds API 市场赔率去水反推")
+    if quota:
+        L.append(f"> {quota}")
+    L.append("")
+
+    cons = _outright_consensus(pools) if pools else []
+    if cons:
+        L.append("## 🏆 捧杯概率（outright，含加时点球）")
+        L.append("")
+        for i, (t, p) in enumerate(cons, 1):
+            mk = "🥇" if i == 1 else ("🥈" if i == 2 else f"{i}")
+            L.append(f"{mk} {cn_flag(t)} **{p:.1f}%**")
+        L.append("")
+
+    if matches:
+        for mt in matches:
+            books = mt["books"]
+            n = len(books)
+            avg = lambda k: sum(b[k] for b in books) / n
+            L.append(f"## 🏟️ 决赛 {cn_flag(mt['home'])} vs {cn_flag(mt['away'])}（90分钟）")
+            L.append(f"_采样 {n} 家，下表挑代表性几家（完整 {n} 家见仓库文件）_")
+            L.append("")
+            L.append("| 公司 | 主胜 | 平 | 客胜 | 主% | 客% |")
+            L.append("|:--|--:|--:|--:|--:|--:|")
+            want = ["Pinnacle", "DraftKings", "Betfair", "William Hill",
+                    "Betano (UK)", "BetUS", "888sport", "Unibet (FR)"]
+            pick = [b for b in books if b["title"] in want]
+            if len(pick) < 4:
+                pick = books[:6]
+            for b in pick:
+                L.append(f"| {b['title']} | {b['ph']:.2f} | {b['pd']:.2f} | {b['pa']:.2f} | {b['ih']:.0f} | {b['ia']:.0f} |")
+            L.append(f"| **共识** | **{avg('ph'):.2f}** | **{avg('pd'):.2f}** | **{avg('pa'):.2f}** | **{avg('ih'):.0f}** | **{avg('ia'):.0f}** |")
+            L.append("")
+            fav_home = avg("ih") >= avg("ia")
+            fav = mt["home"] if fav_home else mt["away"]
+            L.append(f"🏅 最看好 **{cn_flag(fav)}**（共识 {max(avg('ih'), avg('ia')):.0f}%）")
+            L.append("")
+
+    L.append("_去水=剔除博彩公司抽水后反推；完整 49 家见 reports/赔率报告.md_")
+    return "\n".join(L)
+
+
 def main():
     _bj = dt.datetime.utcnow() + dt.timedelta(hours=8)
     now_str = _bj.strftime("%Y-%m-%d %H:%M")
@@ -447,6 +533,17 @@ def main():
     print(f"\n✅ 报告已写入：reports/赔率报告.md")
     if quota:
         print(f"📊 {quota}")
+
+    # 推送精简版到微信（PushPlus）
+    ppt = (os.environ.get("PUSHPLUS_TOKEN") or "").strip()
+    wc_md = build_wechat_md(matches, pools, now_str, quota)
+    digest = ""
+    cons = _outright_consensus(pools) if pools else []
+    if cons:
+        digest = "捧杯 " + "、".join(f"{cn(t)} {p:.0f}%" for t, p in cons[:2])
+    push_msg = push_to_wechat(ppt, f"⚽ 世界杯赔率版报告 · {today.isoformat()}",
+                              wc_md, summary=digest)
+    print(f"📲 {push_msg}")
 
 
 def _write(today, report):
