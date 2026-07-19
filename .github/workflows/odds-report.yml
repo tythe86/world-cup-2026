@@ -1,0 +1,59 @@
+name: 赔率版报告（手动）
+
+# 仅手动触发：拉 The Odds API 市场赔率，生成「赔率为主」的中文报告
+# 用 ODDS_API_KEY secret（本地无此 key，故放 Actions 上跑）
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: odds-report
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 生成赔率报告
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python report_odds.py
+
+      - name: 写入 Actions 运行摘要
+        run: |
+          {
+            echo "# 📊 赔率版报告"
+            echo ""
+            cat reports/赔率报告.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 提交报告回仓库
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/赔率报告.md
+          if git diff --cached --quiet; then
+            echo "报告无变化，跳过提交。"
+          else
+            git commit -m "📊 赔率版报告 $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M') [skip ci]"
+            git pull --rebase origin main
+            git push
+          fi
