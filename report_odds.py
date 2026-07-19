@@ -379,13 +379,17 @@ def render_outright(pools) -> list[str]:
 PUSHPLUS_URL = "http://www.pushplus.plus/send"
 
 
-def push_to_wechat(token: str, title: str, content: str, summary: str = "") -> str:
-    """PushPlus 推送到微信（markdown 模板）。token 为空则跳过。"""
+def push_to_wechat(token: str, title: str, content: str, template: str = "markdown",
+                   summary: str = "") -> str:
+    """PushPlus 推送到微信。template 可选 'markdown'/'html'；token 为空则跳过。
+    html 模板下把纯文本 summary 放到 content 最前，避免消息预览抓到 HTML 标签代码。"""
     if not token:
         return "未配置 PUSHPLUS_TOKEN，跳过微信推送"
     try:
+        if summary and template == "html":
+            content = f"{summary}\n" + content
         payload = {"token": token, "title": title, "content": content,
-                   "template": "markdown", "channel": "wechat"}
+                   "template": template, "channel": "wechat"}
         if summary:
             payload["summary"] = summary
         r = requests.post(PUSHPLUS_URL, json=payload, timeout=30)
@@ -414,49 +418,179 @@ def _outright_consensus(pools):
     return sorted(((t, sum(v) / len(v)) for t, v in tp.items()), key=lambda x: -x[1])
 
 
-def build_wechat_md(matches, pools, now_str, quota) -> str:
-    """手机端精简版：outright 全表 + h2h 共识 + 代表性几家。"""
-    L = ["# ⚽ 世界杯 · 赔率版报告", ""]
-    L.append(f"> {now_str}（北京）｜ The Odds API 市场赔率去水反推")
+# ──────────────────────────────────────────────
+# 微信 HTML 报告（PushPlus template=html，样式与每日报告同款）
+# ──────────────────────────────────────────────
+_HTML_CSS = """
+*{box-sizing:border-box;}
+body{margin:0;padding:0;background:#eef1f4;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#2b2f33;line-height:1.6;}
+.wrap{padding:10px;}
+.hdr{background:#0a7d3c;background:linear-gradient(135deg,#0a7d3c 0%,#13ae5d 100%);color:#fff;border-radius:14px;padding:18px 16px;}
+.hdr h1{margin:0 0 8px;font-size:19px;line-height:1.35;}
+.hdr p{margin:4px 0;font-size:13px;opacity:.94;}
+.card{background:#fff;border-radius:14px;padding:14px 12px 10px;margin-top:11px;}
+.card h2{margin:0 0 10px;font-size:16px;color:#0a7d3c;border-bottom:2px solid #eaf5ee;padding-bottom:7px;}
+table.grid{width:100%;border-collapse:collapse;font-size:13.5px;}
+table.grid th{background:#f0f7f1;color:#3a7d4f;font-weight:600;padding:7px 4px;font-size:12.5px;text-align:center;}
+table.grid td{padding:7px 4px;border-bottom:1px solid #f0f2f4;text-align:center;vertical-align:middle;}
+table.grid td.l,table.grid th.l{text-align:left;}
+table.grid tr:last-child td{border-bottom:none;}
+table.grid.consensus td{background:#f0f7f1;font-weight:700;}
+table.grid.compact{font-size:12px;}
+table.grid.compact td,table.grid.compact th{padding:5px 3px;}
+.t{white-space:nowrap;color:#666;font-size:12.5px;}
+.muted{color:#8a9099;font-size:12px;}
+.en{color:#aab0b6;font-size:11px;}
+.rk{color:#9aa0a6;font-weight:700;width:32px;}
+.bars{margin:6px 0 10px;}
+.bar-title{font-size:11px;color:#8a9099;font-weight:600;margin:2px 0;}
+.bar-row{display:block;margin:6px 0;font-size:13px;}
+.bar-label{display:inline-block;width:30%;vertical-align:middle;color:#555;}
+.bar-track{display:inline-block;vertical-align:middle;height:14px;background:#eef1f4;border-radius:7px;overflow:hidden;}
+.bar-fill{display:block;height:100%;border-radius:7px;}
+.bar-val{display:inline-block;width:16%;text-align:right;vertical-align:middle;font-weight:600;font-variant-numeric:tabular-nums;color:#2b2f33;}
+.kv{font-size:13px;color:#444;margin:4px 0;}
+.match{background:#fafbfc;border:1px solid #eef1f4;border-radius:12px;padding:11px 12px;margin:9px 0;}
+.match-head{font-size:16px;font-weight:700;}
+.match-sub{margin:2px 0 8px;}
+.vs{color:#b8bec5;font-size:12px;margin:0 3px;font-weight:400;}
+ul.notes{margin:6px 0 0;padding-left:18px;font-size:12.5px;color:#666;}
+ul.notes li{margin:4px 0;}
+.footer{text-align:center;color:#aab0b6;font-size:11px;margin:14px 0 4px;}
+"""
+
+
+def _h(s) -> str:
+    import html as _html
+    return _html.escape(str(s), quote=False)
+
+
+def _team_html(name: str) -> str:
+    f = flag(name)
+    return f"{f} {cn(name)}" if f else cn(name)
+
+
+def _prob_bar(label: str, pct: float, color: str) -> str:
+    pct = max(0.0, min(100.0, pct))
+    return (
+        '<div class="bar-row">'
+        f'<span class="bar-label">{_h(label)}</span>'
+        f'<span class="bar-track" style="width:52%"><span class="bar-fill" style="width:{pct:.1f}%;background:{color}"></span></span>'
+        f'<span class="bar-val">{pct:.1f}%</span>'
+        '</div>'
+    )
+
+
+def render_html_h2h(mt) -> str:
+    home, away = mt["home"], mt["away"]
+    books = mt["books"]
+    n = len(books)
+    avg = lambda k: sum(b[k] for b in books) / n
+    ct = mt.get("commence", "")
+    sub = (f"开赛（北京）{_bj_from_iso(ct)} · 采样 {n} 家博彩公司") if ct else f"采样 {n} 家博彩公司"
+
+    bars = ('<div class="bar-title">共识概率（去水后各家均值）</div>'
+            + _prob_bar(f"主胜 · {cn(home)}", avg("ih"), "#0fae57")
+            + _prob_bar("平局", avg("id"), "#d97706")
+            + _prob_bar(f"客胜 · {cn(away)}", avg("ia"), "#2563eb"))
+
+    rows = []
+    for b in books:
+        rows.append(
+            f'<tr><td class="l">{_h(b["title"])}</td>'
+            f'<td>{b["ph"]:.2f}</td><td>{b["pd"]:.2f}</td><td>{b["pa"]:.2f}</td>'
+            f'<td>{b["ih"]:.0f}</td><td>{b["ia"]:.0f}</td></tr>'
+        )
+    rows.append(
+        f'<tr class="consensus"><td class="l">共识（均值）</td>'
+        f'<td>{avg("ph"):.2f}</td><td>{avg("pd"):.2f}</td><td>{avg("pa"):.2f}</td>'
+        f'<td>{avg("ih"):.0f}</td><td>{avg("ia"):.0f}</td></tr>'
+    )
+    table = ('<table class="grid compact"><thead><tr>'
+             '<th class="l">博彩公司</th><th>主胜</th><th>平</th><th>客胜</th><th>主%</th><th>客%</th>'
+             '</tr></thead><tbody>' + "".join(rows) + '</tbody></table>')
+
+    fav_home = avg("ih") >= avg("ia")
+    fav = home if fav_home else away
+    fav_pct = max(avg("ih"), avg("ia"))
+    return (
+        '<div class="match">'
+        f'<div class="match-head">{_team_html(home)} <span class="vs">VS</span> {_team_html(away)}</div>'
+        f'<div class="match-sub muted">{_h(sub)}　·　主胜/平/客胜 = 常规 90 分钟</div>'
+        f'<div class="bars">{bars}</div>'
+        f'<div class="kv">🏅 最看好 <b>{_team_html(fav)}</b>（共识 {fav_pct:.0f}%）</div>'
+        f'{table}'
+        '</div>'
+    )
+
+
+def render_html_outright(pools) -> str:
+    cons = _outright_consensus(pools)
+    if not cons:
+        return '<p class="muted">未取到 outright 冠军赔率。</p>'
+    by_mkt = defaultdict(list)
+    for p in pools:
+        by_mkt[p["market_key"]].append(p)
+    chosen = by_mkt[max(by_mkt, key=lambda k: len(by_mkt[k]))]
+    n_books = len(chosen)
+
+    colors = ["#f0a500", "#9aa0a6", "#c8ccd1"]
+    bars = '<div class="bar-title">市场隐含捧杯概率（去水后跨家均值）</div>'
+    for i, (t, p) in enumerate(cons):
+        bars += _prob_bar(f"{cn(t)}", p, colors[i % len(colors)])
+
+    rows = []
+    for p in sorted(chosen, key=lambda x: x["book"]):
+        ranked = sorted(p["teams"].items(), key=lambda kv: kv[1])
+        t1, pr1 = ranked[0]
+        t2, pr2 = ranked[1] if len(ranked) > 1 else ("", 0)
+        rows.append(
+            f'<tr><td class="l">{_h(p["book"])}</td>'
+            f'<td class="l">{_team_html(t1)}</td><td>{pr1:.1f}</td>'
+            f'<td class="l">{_team_html(t2) if t2 else "-"}</td><td>{pr2:.1f}</td></tr>'
+        )
+    table = ('<table class="grid"><thead><tr>'
+             '<th class="l">博彩公司</th><th class="l">第一热门</th><th>赔率</th>'
+             '<th class="l">第二热门</th><th>赔率</th>'
+             '</tr></thead><tbody>' + "".join(rows) + '</tbody></table>')
+    return f'<p class="muted">采样 {n_books} 家，去水后跨家均值（含加时与点球）</p><div class="bars">{bars}</div>{table}'
+
+
+def render_html_report_odds(now_str, h2h_status, quota, matches, pools, digest) -> str:
+    """组装完整的微信 HTML 报告。"""
+    P = []
+    title_text = "⚽ 世界杯 · 赔率版报告"
+    P.append('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+             '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">'
+             f'<title>{_h(title_text)}</title>'
+             f'<meta name="description" content="{_h(digest)}">'
+             f'<style>{_HTML_CSS}</style></head><body><div class="wrap">')
+
+    hdr = ['<div class="hdr"><h1>⚽ 世界杯 · 赔率版报告</h1>'
+           f'<p>🕒 生成时间（北京）{_h(now_str)} ｜ The Odds API 市场赔率去水反推</p>']
+    if h2h_status:
+        hdr.append(f'<p>💰 {_h(h2h_status)}</p>')
     if quota:
-        L.append(f"> {quota}")
-    L.append("")
+        hdr.append(f'<p>📊 {_h(quota)}</p>')
+    hdr.append('</div>')
+    P.append("".join(hdr))
 
-    cons = _outright_consensus(pools) if pools else []
-    if cons:
-        L.append("## 🏆 捧杯概率（outright，含加时点球）")
-        L.append("")
-        for i, (t, p) in enumerate(cons, 1):
-            mk = "🥇" if i == 1 else ("🥈" if i == 2 else f"{i}")
-            L.append(f"{mk} {cn_flag(t)} **{p:.1f}%**")
-        L.append("")
+    body = "".join(render_html_h2h(mt) for mt in matches) if matches \
+        else '<p class="muted">当前无 h2h 赔率--决赛可能已开赛/结束。</p>'
+    P.append('<div class="card"><h2>🏟️ 一、决赛赔率（各家对比 · 去水反推）</h2>' + body + '</div>')
 
-    if matches:
-        for mt in matches:
-            books = mt["books"]
-            n = len(books)
-            avg = lambda k: sum(b[k] for b in books) / n
-            L.append(f"## 🏟️ 决赛 {cn_flag(mt['home'])} vs {cn_flag(mt['away'])}（90分钟）")
-            L.append(f"_采样 {n} 家，下表挑代表性几家（完整 {n} 家见仓库文件）_")
-            L.append("")
-            L.append("| 公司 | 主胜 | 平 | 客胜 | 主% | 客% |")
-            L.append("|:--|--:|--:|--:|--:|--:|")
-            want = ["Pinnacle", "DraftKings", "Betfair", "William Hill",
-                    "Betano (UK)", "BetUS", "888sport", "Unibet (FR)"]
-            pick = [b for b in books if b["title"] in want]
-            if len(pick) < 4:
-                pick = books[:6]
-            for b in pick:
-                L.append(f"| {b['title']} | {b['ph']:.2f} | {b['pd']:.2f} | {b['pa']:.2f} | {b['ih']:.0f} | {b['ia']:.0f} |")
-            L.append(f"| **共识** | **{avg('ph'):.2f}** | **{avg('pd'):.2f}** | **{avg('pa'):.2f}** | **{avg('ih'):.0f}** | **{avg('ia'):.0f}** |")
-            L.append("")
-            fav_home = avg("ih") >= avg("ia")
-            fav = mt["home"] if fav_home else mt["away"]
-            L.append(f"🏅 最看好 **{cn_flag(fav)}**（共识 {max(avg('ih'), avg('ia')):.0f}%）")
-            L.append("")
+    P.append('<div class="card"><h2>🏆 二、捧杯概率（outright，含加时点球）</h2>'
+             + render_html_outright(pools) + '</div>')
 
-    L.append("_去水=剔除博彩公司抽水后反推；完整 49 家见 reports/赔率报告.md_")
-    return "\n".join(L)
+    P.append('<div class="card"><h2>📌 说明</h2><ul class="notes">'
+             '<li>去水（de-vig）：赔率反推为隐含概率后归一，剔除博彩公司抽水，更接近「真实」市场概率。</li>'
+             '<li>h2h = 常规 90 分钟结果；outright = 捧杯概率（含加时点球），替代模型蒙特卡洛。</li>'
+             '<li>数据来自 The Odds API（eu/uk/us 三区聚合），瞬时快照。</li>'
+             '</ul></div>')
+
+    P.append('<div class="footer">- 赔率版报告 · odds-report workflow 生成 -</div>')
+    P.append('</div></body></html>')
+    return "\n".join(P)
 
 
 def main():
@@ -534,15 +668,24 @@ def main():
     if quota:
         print(f"📊 {quota}")
 
-    # 推送精简版到微信（PushPlus）
+    # 推送 HTML 版到微信（PushPlus html 模板，样式同每日报告）
     ppt = (os.environ.get("PUSHPLUS_TOKEN") or "").strip()
-    wc_md = build_wechat_md(matches, pools, now_str, quota)
-    digest = ""
     cons = _outright_consensus(pools) if pools else []
+    digest = ""
     if cons:
         digest = "捧杯 " + "、".join(f"{cn(t)} {p:.0f}%" for t, p in cons[:2])
+    if matches:
+        mt0 = matches[0]
+        nb = len(mt0["books"])
+        sh = sum(b["ih"] for b in mt0["books"]) / nb
+        sa = sum(b["ia"] for b in mt0["books"]) / nb
+        digest = f"决赛 {cn(mt0['home'])} vs {cn(mt0['away'])} 共识 {sh:.0f}%/{sa:.0f}%　｜　" + digest
+    html_report = render_html_report_odds(now_str, h2h_status, quota, matches, pools, digest)
+    # 本地存一份预览，方便在浏览器里看推送效果
+    (Path(__file__).resolve().parent / "reports").mkdir(parents=True, exist_ok=True)
+    (Path(__file__).resolve().parent / "reports" / "preview_odds.html").write_text(html_report, encoding="utf-8")
     push_msg = push_to_wechat(ppt, f"⚽ 世界杯赔率版报告 · {today.isoformat()}",
-                              wc_md, summary=digest)
+                              html_report, template="html", summary=digest)
     print(f"📲 {push_msg}")
 
 
